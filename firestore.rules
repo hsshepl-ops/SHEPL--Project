@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────────────────
+    //  HELPER FUNCTIONS
+    // ─────────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function myRole() {
+      return userProfile().role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && myRole() == 'admin';
+    }
+
+    function isManagement() {
+      return isSignedIn() && myRole() in ['admin', 'management'];
+    }
+
+    // Can the current user VIEW a specific document?
+    // Admin sees all. Others only see docs where they are primaryOwner or additionalViewer.
+    function canViewDoc(docData) {
+      return isAdmin()
+        || docData.primaryOwnerId == request.auth.uid
+        || (docData.additionalViewerIds != null && request.auth.uid in docData.additionalViewerIds);
+    }
+
+    // Can the current user EDIT a revision on a document?
+    // Admin always can. Non-admin only if they are the primary owner AND have an edit-capable role.
+    function canEditRevisionOn(docData) {
+      return isAdmin()
+        || (
+          docData.primaryOwnerId == request.auth.uid
+          && myRole() in ['project_manager', 'document_controller', 'engineer']
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  USERS COLLECTION
+    //  Admins can do anything. Users can read all profiles
+    //  (needed for owner dropdowns) and update their OWN
+    //  display name / email — but NEVER change their own role.
+    // ─────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+        || (
+          request.auth.uid == userId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+        );
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  PROJECTS COLLECTION
+    //  All signed-in users can read projects (needed for
+    //  filter dropdowns). Only admins can write.
+    // ─────────────────────────────────────────────────────────
+    match /projects/{projectId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  DOCUMENTS COLLECTION
+    //  Read: admin sees all; others see only their docs.
+    //  For list queries the client sends queries filtered by
+    //  primaryOwnerId or additionalViewerIds, so each result
+    //  doc will satisfy canViewDoc automatically.
+    //  Write: only admin can create/update/delete master data.
+    // ─────────────────────────────────────────────────────────
+    match /documents/{documentId} {
+      allow read: if isSignedIn() && canViewDoc(resource.data);
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  REVISIONS COLLECTION
+    //  Read: signed-in users (client filters by documentId,
+    //  and only fetches revisions for docs they can view).
+    //  Create/Update: user must be able to edit the parent doc.
+    //  Delete: admin only.
+    // ─────────────────────────────────────────────────────────
+    match /revisions/{revisionId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && exists(/databases/$(database)/documents/documents/$(request.resource.data.documentId))
+        && canEditRevisionOn(
+            get(/databases/$(database)/documents/documents/$(request.resource.data.documentId)).data
+           );
+
+      allow update: if isSignedIn()
+        && exists(/databases/$(database)/documents/documents/$(resource.data.documentId))
+        && canEditRevisionOn(
+            get(/databases/$(database)/documents/documents/$(resource.data.documentId)).data
+           );
+
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  AUDIT EVENTS COLLECTION
+    //  Anyone signed-in can create an event (app writes them
+    //  on every mutation). Only admins can read the audit log.
+    //  Events are immutable — no update or delete allowed.
+    // ─────────────────────────────────────────────────────────
+    match /auditEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+  }
+}

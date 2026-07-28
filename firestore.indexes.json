@@ -1,0 +1,77 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "primaryOwnerId", "order": "ASCENDING" },
+        { "fieldPath": "documentNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "primaryOwnerId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "additionalViewerIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "documentNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "additionalViewerIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "documentNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "documentNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "revisions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "documentId", "order": "ASCENDING" },
+        { "fieldPath": "revisionNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "auditEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "entityId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "auditEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "actorId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
