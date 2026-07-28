@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DCI — Document Control System</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Firebase v10 Compat SDK (no build step needed) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <!-- SheetJS for Excel import/export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+  <!-- The entire UI is injected here by app.js -->
+  <div id="app">
+    <div class="loading-screen">
+      <div class="spinner"></div>
+      <p>Starting…</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
