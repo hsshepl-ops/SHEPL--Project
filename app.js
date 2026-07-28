@@ -7,12 +7,12 @@
 //  1.  FIREBASE CONFIG  ← PASTE YOUR OWN VALUES HERE
 // ══════════════════════════════════════════════════════
 const FIREBASE_CONFIG = {
-  apiKey:            "PASTE_YOUR_API_KEY_HERE",
-  authDomain:        "PASTE_YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "PASTE_YOUR_PROJECT_ID",
-  storageBucket:     "PASTE_YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "PASTE_YOUR_SENDER_ID",
-  appId:             "PASTE_YOUR_APP_ID"
+  apiKey: "AIzaSyCnUghRn1eHMGFViaMbtKjTnGr2A_vbmPM",
+  authDomain: "dci-document-control.firebaseapp.com",
+  projectId: "dci-document-control",
+  storageBucket: "dci-document-control.firebasestorage.app",
+  messagingSenderId: "934020909406",
+  appId: "1:934020909406:web:bf80144cb9a5300b9ca7cf"
 };
 
 // ══════════════════════════════════════════════════════
