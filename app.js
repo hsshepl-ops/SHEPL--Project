@@ -150,47 +150,110 @@ async function getUser(id) {
 }
 
 async function getDashboardData() {
-  const [allDocsSnap, activeProjectsSnap, revsSnap, recentSnap] = await Promise.all([
-    db.collection('documents').get(),
-    db.collection('projects').where('active', '==', true).get(),
-    db.collection('revisions').get(),
-    db.collection('auditEvents').orderBy('createdAt', 'desc').limit(20).get()
-  ]);
-
-  const docs = allDocsSnap.docs.map(d => d.data());
-  const revs = revsSnap.docs.map(d => d.data());
+  const uid = S.user.uid;
   const today = new Date(); today.setHours(0,0,0,0);
   const warningMs = 7 * 86400000;
 
-  let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0;
-  revs.forEach(r => {
-    if (r.finalApproved) { received++; return; }
-    if (r.actualSentDate && !r.receivedDate) { awaitingResponse++; return; }
-    if (!r.targetSentDate || r.actualSentDate) return;
-    const target = new Date(r.targetSentDate);
-    if (target < today) overdue++;
-    else if (target - today <= warningMs) dueSoon++;
-  });
+  let docs = [], recentEvents = [];
 
-  // docs by discipline
-  const byDisc = {};
-  docs.forEach(d => { byDisc[d.discipline || 'Other'] = (byDisc[d.discipline || 'Other'] || 0) + 1; });
+  if (isManagement()) {
+    // ── Admin / Management: full access to all data ──────────────────
+    const [allDocsSnap, revsSnap, recentSnap] = await Promise.all([
+      db.collection('documents').get(),
+      db.collection('revisions').get(),
+      // Audit read is admin-only in rules — safe to query here
+      db.collection('auditEvents').orderBy('createdAt','desc').limit(20).get()
+    ]);
+    docs = allDocsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    recentEvents = recentSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // docs by project
-  const byProject = {};
-  docs.forEach(d => { byProject[d.projectId] = (byProject[d.projectId] || 0) + 1; });
+    const revs = revsSnap.docs.map(d => d.data());
+    let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0;
+    revs.forEach(r => {
+      if (r.finalApproved) { received++; return; }
+      if (r.actualSentDate && !r.receivedDate) { awaitingResponse++; return; }
+      if (!r.targetSentDate || r.actualSentDate) return;
+      const target = new Date(r.targetSentDate);
+      if (target < today) overdue++;
+      else if (target - today <= warningMs) dueSoon++;
+    });
 
-  const recentEvents = recentSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const byDisc = {}, byProject = {};
+    docs.forEach(d => {
+      byDisc[d.discipline || 'Other'] = (byDisc[d.discipline || 'Other'] || 0) + 1;
+      byProject[d.projectId] = (byProject[d.projectId] || 0) + 1;
+    });
 
-  return {
-    totalDocs: docs.length,
-    activeDocs: docs.filter(d => d.state === 'active').length,
-    totalProjects: activeProjectsSnap.size,
-    totalRevisions: revs.length,
-    overdue, dueSoon, awaitingResponse, received,
-    byDisc, byProject,
-    recentEvents
-  };
+    // Count active projects from docs (avoids separate query)
+    const activeProjIds = new Set(docs.filter(d => d.state === 'active').map(d => d.projectId).filter(Boolean));
+
+    return {
+      totalDocs: docs.length,
+      activeDocs: docs.filter(d => d.state === 'active').length,
+      totalProjects: activeProjIds.size,
+      totalRevisions: revs.length,
+      overdue, dueSoon, awaitingResponse, received,
+      byDisc, byProject, recentEvents,
+      isFullView: true
+    };
+
+  } else {
+    // ── Non-admin: only documents assigned to this user ──────────────
+    // Two filtered queries — each is allowed by Firestore rules
+    const [ownedSnap, viewingSnap] = await Promise.all([
+      db.collection('documents').where('primaryOwnerId', '==', uid).get(),
+      db.collection('documents').where('additionalViewerIds', 'array-contains', uid).get()
+    ]);
+
+    // Merge and de-duplicate
+    const docMap = {};
+    [...ownedSnap.docs, ...viewingSnap.docs].forEach(d => {
+      docMap[d.id] = { id: d.id, ...d.data() };
+    });
+    docs = Object.values(docMap);
+
+    const docIds = docs.map(d => d.id);
+
+    // Fetch revisions only for accessible documents
+    // Firestore 'in' query has a 30-item limit — chunk if needed
+    let revs = [];
+    if (docIds.length > 0) {
+      const chunks = [];
+      for (let i = 0; i < docIds.length; i += 30) chunks.push(docIds.slice(i, i + 30));
+      const snapshots = await Promise.all(
+        chunks.map(chunk => db.collection('revisions').where('documentId', 'in', chunk).get())
+      );
+      revs = snapshots.flatMap(s => s.docs.map(d => d.data()));
+    }
+
+    let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0;
+    revs.forEach(r => {
+      if (r.finalApproved) { received++; return; }
+      if (r.actualSentDate && !r.receivedDate) { awaitingResponse++; return; }
+      if (!r.targetSentDate || r.actualSentDate) return;
+      const target = new Date(r.targetSentDate);
+      if (target < today) overdue++;
+      else if (target - today <= warningMs) dueSoon++;
+    });
+
+    const byDisc = {}, byProject = {};
+    docs.forEach(d => {
+      byDisc[d.discipline || 'Other'] = (byDisc[d.discipline || 'Other'] || 0) + 1;
+      byProject[d.projectId] = (byProject[d.projectId] || 0) + 1;
+    });
+
+    const activeProjIds = new Set(docs.filter(d => d.state === 'active').map(d => d.projectId).filter(Boolean));
+
+    return {
+      totalDocs: docs.length,
+      activeDocs: docs.filter(d => d.state === 'active').length,
+      totalProjects: activeProjIds.size,
+      totalRevisions: revs.length,
+      overdue, dueSoon, awaitingResponse, received,
+      byDisc, byProject, recentEvents: [],
+      isFullView: false
+    };
+  }
 }
 
 async function writeAudit(action, entityType, entityId, label, changes = {}) {
@@ -463,11 +526,19 @@ async function renderDashboard() {
     </tr>`;
   }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">No recent activity</td></tr>`;
 
+  const heroTitle   = data.isFullView ? 'Company Schedule Dashboard' : 'My Document Dashboard';
+  const heroSubtitle = data.isFullView
+    ? `SH Engitech Pvt. Ltd · Document Control Index · ${esc(today())}`
+    : `${esc(S.profile?.displayName || '')} · ${esc(ROLE_LABELS[S.profile?.role] || '')} · ${esc(today())}`;
+
+  const docLabel   = data.isFullView ? 'Total Documents'   : 'My Documents';
+  const projLabel  = data.isFullView ? 'Active Projects'   : 'My Projects';
+
   render(pageShell('dashboard', `
     <div class="dash-hero">
       <div>
-        <h1>Company Schedule Dashboard</h1>
-        <p>SH Engitech Pvt. Ltd · Document Control Index · ${esc(today())}</p>
+        <h1>${heroTitle}</h1>
+        <p>${heroSubtitle}</p>
       </div>
       <div class="hero-actions">
         <a class="btn-hero" href="#/export">📥 Export Excel</a>
@@ -478,11 +549,11 @@ async function renderDashboard() {
 
     <div class="kpi-grid">
       <a class="kpi info" href="#/documents">
-        <span>Total Documents</span><strong>${data.totalDocs}</strong>
+        <span>${docLabel}</span><strong>${data.totalDocs}</strong>
         <small>${data.activeDocs} active</small>
       </a>
       <a class="kpi success" href="#/projects">
-        <span>Active Projects</span><strong>${data.totalProjects}</strong>
+        <span>${projLabel}</span><strong>${data.totalProjects}</strong>
         <small>in progress</small>
       </a>
       <div class="kpi">
@@ -506,22 +577,23 @@ async function renderDashboard() {
     <div class="dashboard-grid">
       <div class="panel table-panel">
         <div class="panel-heading">
-          <div><h2>Top Projects by Document Count</h2></div>
+          <div><h2>${data.isFullView ? 'Top Projects by Document Count' : 'My Projects'}</h2></div>
           <a href="#/projects" style="font-size:13px">View all →</a>
         </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Project #</th><th>Name</th><th>Client</th><th style="text-align:right">Docs</th></tr></thead>
-            <tbody>${projRows || '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--muted)">No projects yet</td></tr>'}</tbody>
+            <tbody>${projRows || '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--muted)">No documents assigned yet</td></tr>'}</tbody>
           </table>
         </div>
       </div>
       <div class="panel">
         <div class="panel-heading"><h2>Documents by Discipline</h2></div>
-        <div class="bar-list">${discBars || '<p style="color:var(--muted)">No data yet</p>'}</div>
+        <div class="bar-list">${discBars || '<p style="color:var(--muted);padding:12px 0">No documents yet</p>'}</div>
       </div>
     </div>
 
+    ${data.isFullView && data.recentEvents.length > 0 ? `
     <div class="panel table-panel">
       <div class="panel-heading">
         <div><h2>Recent Activity</h2></div>
@@ -533,7 +605,7 @@ async function renderDashboard() {
           <tbody>${recentRows}</tbody>
         </table>
       </div>
-    </div>
+    </div>` : ''}
   `));
 }
 
