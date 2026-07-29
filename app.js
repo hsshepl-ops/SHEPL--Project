@@ -423,7 +423,12 @@ async function renderDashboard() {
   // Discipline bars
   const discEntries = Object.entries(data.byDisc).sort((a,b) => b[1]-a[1]);
   const maxDisc = Math.max(1, ...discEntries.map(e=>e[1]));
-  const DISC_COLORS = { MEC:'#2563eb', PRC:'#7c3aed', QAC:'#059669', PMG:'#d97706', ELT:'#dc2626', INS:'#0891b2', Other:'#94a3b8' };
+  // SHEPL teal/green palette for discipline bars
+  const DISC_COLORS = {
+    ELT:'#009E9B', INS:'#007B7A', MEC:'#005f5e', PRC:'#3a8a3e',
+    PMG:'#00b4b0', QAC:'#6bd6d3', CIV:'#1a8c8a', STR:'#0d6e6c',
+    ARC:'#4db8b5', HSE:'#2ca9a7', Other:'#98a2b3'
+  };
 
   const discBars = discEntries.map(([disc, cnt]) => `
     <div class="bar-row">
@@ -459,15 +464,15 @@ async function renderDashboard() {
   }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">No recent activity</td></tr>`;
 
   render(pageShell('dashboard', `
-    <div class="page-header">
+    <div class="dash-hero">
       <div>
         <h1>Company Schedule Dashboard</h1>
-        <p>All document schedules · ${esc(today())}</p>
+        <p>SH Engitech Pvt. Ltd · Document Control Index · ${esc(today())}</p>
       </div>
-      <div class="header-actions">
-        <a class="btn btn-secondary" href="#/export">Export Excel</a>
-        ${isAdmin() ? `<a class="btn btn-secondary" href="#/admin/import">Import Excel</a>` : ''}
-        ${isAdmin() ? `<a class="btn btn-primary" href="#/documents/new">+ Add Document</a>` : ''}
+      <div class="hero-actions">
+        <a class="btn-hero" href="#/export">📥 Export Excel</a>
+        ${isManagement() ? `<a class="btn-hero" href="#/admin/import">📤 Import Excel</a>` : ''}
+        ${isManagement() ? `<a class="btn-hero btn-hero-primary" href="#/documents/new">+ Add Document</a>` : ''}
       </div>
     </div>
 
