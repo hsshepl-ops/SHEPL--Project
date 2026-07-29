@@ -55,17 +55,17 @@ const isAdmin = () => S.profile?.role === 'admin';
 const isManagement = () => ['admin','management'].includes(S.profile?.role);
 
 function canViewDoc(doc) {
-  if (isAdmin()) return true;
+  if (isManagement()) return true;
   if (!S.user) return false;
   return doc.primaryOwnerId === S.user.uid ||
          (Array.isArray(doc.additionalViewerIds) && doc.additionalViewerIds.includes(S.user.uid));
 }
 function canEditRevision(doc) {
-  if (isAdmin()) return true;
+  if (isManagement()) return true;
   if (!S.user || !S.profile) return false;
   return doc.primaryOwnerId === S.user.uid && OWNER_EDIT_ROLES.includes(S.profile.role);
 }
-function canEditDoc(doc) { return isAdmin(); }
+function canEditDoc(doc) { return isManagement(); }
 
 // ══════════════════════════════════════════════════════
 //  6.  FIRESTORE HELPERS
@@ -73,7 +73,7 @@ function canEditDoc(doc) { return isAdmin(); }
 
 async function getAccessibleDocuments(filters = {}) {
   let docs = [];
-  if (isAdmin()) {
+  if (isManagement()) {
     let q = db.collection('documents');
     if (filters.projectId) q = q.where('projectId', '==', filters.projectId);
     if (filters.state)     q = q.where('state', '==', filters.state);
@@ -262,7 +262,7 @@ function showSpinner() {
 
 function topBar(activePage) {
   const role = S.profile?.role || '';
-  const isA  = isAdmin();
+  const isA  = isManagement();
   const pg   = activePage;
 
   const navLink = (href, label, active) =>
@@ -760,7 +760,7 @@ async function addRevision(docId) {
 }
 
 async function deleteRevision(revId, docId) {
-  if (!isAdmin()) { toast('Admin only.','error'); return; }
+  if (!isManagement()) { toast('Admin/Management only.','error'); return; }
   if (!confirm('Delete this revision? This cannot be undone.')) return;
   await db.collection('revisions').doc(revId).delete();
   await writeAudit('delete','revision',revId,'revision');
@@ -769,7 +769,7 @@ async function deleteRevision(revId, docId) {
 }
 
 async function deleteDocument(docId) {
-  if (!isAdmin()) { toast('Admin only.','error'); return; }
+  if (!isManagement()) { toast('Admin/Management only.','error'); return; }
   if (!confirm('Delete this document and ALL its revisions? This cannot be undone.')) return;
   const revs = await getRevisions(docId);
   const batch = db.batch();
@@ -1312,72 +1312,142 @@ function closeModal(e) {
 //  20.  PAGE: ADMIN USERS
 // ══════════════════════════════════════════════════════
 
+// Dept list (mirrors DISCIPLINES but as full names for users)
+const DEPARTMENTS = ['','Engineering','Electrical','Instrumentation','Mechanical','Project Management',
+  'Procurement','QA/QC','Civil','Structural','Architecture','HSE','Administration','Finance','IT','Operations'];
+
+let _usersUnsubscribe = null; // real-time listener handle
+
+function buildUserRow(u) {
+  const active = u.isActive !== false;
+  return `<tr id="urow-${esc(u.id)}">
+    <td><strong>${esc(u.employeeId||'—')}</strong></td>
+    <td>${esc(u.displayName||'—')}</td>
+    <td>${esc(u.email||'—')}</td>
+    <td>${esc(u.designation||'—')}</td>
+    <td>${esc(u.department||'—')}</td>
+    <td>${roleBadge(u.role)}</td>
+    <td>${active ? badge('Active','badge-success') : badge('Inactive','badge-muted')}</td>
+    <td class="actions-cell" style="white-space:nowrap">
+      <a class="btn btn-link btn-sm" href="#/admin/users/${esc(u.id)}/edit">Edit</a>
+      <button class="btn btn-link btn-sm" style="color:${active?'var(--red)':'var(--green)'}"
+        onclick="toggleUserActive('${esc(u.id)}',${!active})">
+        ${active ? 'Deactivate' : 'Activate'}
+      </button>
+      <button class="btn btn-link btn-sm" style="color:var(--muted)"
+        onclick="resetUserPassword('${esc(u.id)}','${esc(u.email||'')}')">
+        Reset Password
+      </button>
+    </td>
+  </tr>`;
+}
+
 async function renderAdminUsers() {
-  const users = await getUsers();
-  const rows = users.map(u => `
-    <tr>
-      <td>${esc(u.displayName||'—')}</td>
-      <td>${esc(u.email||'—')}</td>
-      <td>${roleBadge(u.role)}</td>
-      <td>${u.isActive === false ? badge('Inactive','badge-muted') : badge('Active','badge-success')}</td>
-      <td class="actions-cell">
-        <a class="btn btn-link btn-sm" href="#/admin/users/${esc(u.id)}/edit">Edit</a>
-        <button class="btn btn-link btn-sm" style="color:${u.isActive===false?'var(--green)':'var(--red)'}" onclick="toggleUserActive('${esc(u.id)}',${!u.isActive})">
-          ${u.isActive === false ? 'Activate' : 'Deactivate'}
-        </button>
-      </td>
-    </tr>`).join('');
+  // Tear down any previous real-time listener
+  if (_usersUnsubscribe) { _usersUnsubscribe(); _usersUnsubscribe = null; }
 
   render(pageShell('admin-users', `
     <div class="page-header">
-      <div><h1>User Management</h1><p>${users.length} users in the system</p></div>
+      <div><h1>User Management</h1><p id="users-count">Loading…</p></div>
       <div class="header-actions">
         <a class="btn btn-primary" href="#/admin/users/new">+ Add User</a>
       </div>
     </div>
-    <div class="alert alert-info">
-      ℹ️ Users are created in Firebase Authentication. Add a user here to give them a role and allow them to sign in.
-      Their password is set when you create them — they should change it after first login.
-    </div>
     <div class="panel table-panel">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="5"><div class="empty-state"><h3>No users yet</h3></div></td></tr>`}</tbody>
+          <thead><tr>
+            <th>Employee ID</th><th>Name</th><th>Email</th>
+            <th>Designation</th><th>Department</th><th>Role</th>
+            <th>Status</th><th style="min-width:240px">Actions</th>
+          </tr></thead>
+          <tbody id="users-tbody">
+            <tr><td colspan="8"><div class="empty-state"><div class="spinner" style="margin:0 auto 8px"></div><p>Loading users…</p></div></td></tr>
+          </tbody>
         </table>
       </div>
     </div>
   `));
+
+  // Real-time listener — updates table automatically when any user doc changes
+  _usersUnsubscribe = db.collection('users').orderBy('displayName').onSnapshot(snap => {
+    const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.cache.users = users; // keep cache in sync
+    const tbody = document.getElementById('users-tbody');
+    const countEl = document.getElementById('users-count');
+    if (!tbody) return; // page was navigated away
+    if (users.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><h3>No users yet</h3><p>Click "+ Add User" to create the first user.</p></div></td></tr>`;
+    } else {
+      tbody.innerHTML = users.map(buildUserRow).join('');
+    }
+    if (countEl) countEl.textContent = `${users.length} user${users.length !== 1 ? 's' : ''} in the system`;
+  }, err => {
+    const tbody = document.getElementById('users-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:red;padding:16px">Error loading users: ${esc(err.message)}</td></tr>`;
+  });
 }
 
 async function renderUserForm(userId) {
   const user = userId ? await getUser(userId) : null;
   const roleOptions = ROLES.map(r =>
     `<option value="${esc(r)}" ${(user?.role||'viewer') === r ? 'selected':''}>${esc(ROLE_LABELS[r])}</option>`).join('');
+  const deptOptions = DEPARTMENTS.map(d =>
+    `<option value="${esc(d)}" ${(user?.department||'') === d ? 'selected':''}>${esc(d||'— Select Department —')}</option>`).join('');
 
   render(pageShell('admin-users', `
-    <div style="margin-bottom:14px"><a href="#/admin/users" style="color:var(--muted);font-size:13px">← Users</a></div>
+    <div style="margin-bottom:14px"><a href="#/admin/users" style="color:var(--muted);font-size:13px">← Back to Users</a></div>
     <div class="form-card">
       <h2 style="margin-bottom:20px">${user ? 'Edit User' : 'Add New User'}</h2>
       <form id="user-form" onsubmit="saveUser(event,${user ? `'${esc(user.id)}'` : 'null'})">
         <div class="form-grid">
+
+          <div class="form-group">
+            <label>Employee ID *</label>
+            <input type="text" id="f-uid" value="${esc(user?.employeeId||'')}" required placeholder="e.g. EMP-001">
+            <span class="hint">Must be unique. Cannot be changed after creation.</span>
+          </div>
+
           <div class="form-group">
             <label>Full Name *</label>
             <input type="text" id="f-uname" value="${esc(user?.displayName||'')}" required placeholder="First Last">
           </div>
+
           <div class="form-group">
             <label>Email Address *</label>
             <input type="email" id="f-uemail" value="${esc(user?.email||'')}" ${user?'readonly':''} required placeholder="user@company.com">
-            ${user ? '<span class="hint">Email cannot be changed after creation.</span>' : ''}
+            ${user ? '<span class="hint">Email cannot be changed here. Use Reset Password to send a new password.</span>' : ''}
           </div>
+
           ${!user ? `<div class="form-group">
-            <label>Password *</label>
-            <input type="password" id="f-upass" required minlength="8" placeholder="Min. 8 characters">
+            <label>Temporary Password *</label>
+            <input type="password" id="f-upass" required minlength="8" placeholder="Min. 8 characters — user should change after login">
           </div>` : ''}
+
+          <div class="form-group">
+            <label>Designation / Job Title *</label>
+            <input type="text" id="f-udesig" value="${esc(user?.designation||'')}" required placeholder="e.g. Senior Engineer">
+          </div>
+
+          <div class="form-group">
+            <label>Department</label>
+            <select id="f-udept">${deptOptions}</select>
+          </div>
+
           <div class="form-group">
             <label>Role *</label>
-            <select id="f-urole" required>${roleOptions}</select>
+            <select id="f-urole" required onchange="updateRoleHint(this.value)">${roleOptions}</select>
+            <span class="hint" id="role-hint">${getRoleHint(user?.role||'viewer')}</span>
           </div>
+
+          <div class="form-group">
+            <label>Account Status</label>
+            <select id="f-ustatus">
+              <option value="active" ${(user?.isActive !== false) ? 'selected' : ''}>Active — can log in</option>
+              <option value="inactive" ${(user?.isActive === false) ? 'selected' : ''}>Inactive — login blocked</option>
+            </select>
+          </div>
+
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" id="user-save-btn">${user ? 'Save Changes' : 'Create User'}</button>
@@ -1389,69 +1459,128 @@ async function renderUserForm(userId) {
   `));
 }
 
+function getRoleHint(role) {
+  const hints = {
+    admin: 'Full access to everything — all pages, all data, all users.',
+    management: 'Director/Management — full view access to everything, can manage users.',
+    project_manager: 'Can view and manage documents in assigned projects.',
+    document_controller: 'Can create and manage document revisions.',
+    engineer: 'Can view documents and submit revision comments.',
+    viewer: 'Read-only access to assigned documents only.'
+  };
+  return hints[role] || '';
+}
+
+function updateRoleHint(role) {
+  const el = document.getElementById('role-hint');
+  if (el) el.textContent = getRoleHint(role);
+}
+
 async function saveUser(e, userId) {
   e.preventDefault();
   const btn = document.getElementById('user-save-btn');
   const err = document.getElementById('user-err');
   btn.disabled = true; btn.textContent = 'Saving…';
+  err.textContent = '';
   try {
-    const name  = document.getElementById('f-uname').value.trim();
-    const email = document.getElementById('f-uemail').value.trim();
-    const role  = document.getElementById('f-urole').value;
-    const pass  = document.getElementById('f-upass')?.value;
+    const name       = document.getElementById('f-uname').value.trim();
+    const email      = document.getElementById('f-uemail').value.trim();
+    const role       = document.getElementById('f-urole').value;
+    const pass       = document.getElementById('f-upass')?.value;
+    const empId      = document.getElementById('f-uid').value.trim().toUpperCase();
+    const desig      = document.getElementById('f-udesig').value.trim();
+    const dept       = document.getElementById('f-udept').value;
+    const isActive   = document.getElementById('f-ustatus').value === 'active';
+
+    if (!empId) throw new Error('Employee ID is required.');
+    if (!name)  throw new Error('Full name is required.');
+
+    // Check for duplicate Employee ID
+    const empSnap = await db.collection('users').where('employeeId', '==', empId).get();
+    if (!empSnap.empty && empSnap.docs[0].id !== userId) {
+      throw new Error(`Employee ID "${empId}" is already in use by another user.`);
+    }
 
     if (userId) {
-      // Update profile only (email/password changes need Firebase Admin or re-auth)
-      await db.collection('users').doc(userId).update({ displayName: name, role, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      // ── UPDATE existing user ──────────────────────────────────────
+      await db.collection('users').doc(userId).update({
+        displayName: name, role, designation: desig, department: dept,
+        isActive, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
       invalidateCache();
-      await writeAudit('update','user',userId,name,{role});
-      toast('User updated.','success');
+      await writeAudit('update', 'user', userId, name, { role });
+      toast('User updated successfully.', 'success');
       nav('/admin/users');
+
     } else {
-      // Create Auth account via REST API — does NOT sign out the current admin
+      // ── CREATE new user ───────────────────────────────────────────
+      if (!pass || pass.length < 8) throw new Error('Password must be at least 8 characters.');
+
+      // Step 1: Create Auth account via REST API — does NOT sign out the admin
       const apiKey = firebase.app().options.apiKey;
       const resp = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password: pass, returnSecureToken: true })
-        }
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password: pass, returnSecureToken: true }) }
       );
       const data = await resp.json();
       if (data.error) {
         const msg = data.error.message || 'Unknown error';
-        if (msg.includes('EMAIL_EXISTS')) throw { code: 'auth/email-already-in-use' };
+        if (msg.includes('EMAIL_EXISTS')) throw new Error('That email address is already registered.');
+        if (msg.includes('WEAK_PASSWORD')) throw new Error('Password is too weak. Use at least 8 characters.');
         throw new Error(msg);
       }
       const newUid = data.localId;
-      // Write Firestore profile
-      await db.collection('users').doc(newUid).set({
-        displayName: name, email, role, isActive: true,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        createdBy: S.user?.uid || ''
-      });
+
+      // Step 2: Write Firestore profile (atomic — if this fails we know Auth was created)
+      try {
+        await db.collection('users').doc(newUid).set({
+          employeeId: empId, displayName: name, email, role,
+          designation: desig, department: dept, isActive,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          createdBy: S.user?.uid || ''
+        });
+      } catch (fsErr) {
+        // Firestore write failed — inform admin so they can retry or use Register tool
+        throw new Error(`Login account created but profile save failed: ${fsErr.message}. The user can log in but won't appear in the list until their profile is fixed.`);
+      }
+
       invalidateCache();
-      await writeAudit('create', 'user', newUid, name, { role, email });
-      toast('User created successfully! They can now sign in.', 'success');
+      await writeAudit('create', 'user', newUid, name, { role, email, empId });
+      toast(`✅ User "${name}" created! They can now sign in.`, 'success');
       nav('/admin/users');
     }
   } catch (ex) {
-    if (ex.code === 'auth/email-already-in-use') {
-      err.textContent = 'That email is already registered.';
-    } else {
-      err.textContent = 'Error: ' + ex.message;
-    }
+    err.textContent = ex.message || String(ex);
     btn.disabled = false; btn.textContent = userId ? 'Save Changes' : 'Create User';
+  }
+}
+
+async function resetUserPassword(userId, email) {
+  if (!email) { toast('No email on record for this user.', 'error'); return; }
+  if (!confirm(`Send a password reset email to ${email}?`)) return;
+  try {
+    const apiKey = firebase.app().options.apiKey;
+    const resp = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestType: 'PASSWORD_RESET', email }) }
+    );
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message);
+    await writeAudit('reset-password', 'user', userId, email);
+    toast(`Password reset email sent to ${email}.`, 'success');
+  } catch (ex) {
+    toast('Failed to send reset email: ' + ex.message, 'error');
   }
 }
 
 async function toggleUserActive(userId, active) {
   await db.collection('users').doc(userId).update({ isActive: active, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
   invalidateCache();
-  await writeAudit(active ? 'activate':'deactivate','user',userId,'user');
-  toast(active ? 'User activated.' : 'User deactivated.','success');
-  renderAdminUsers();
+  await writeAudit(active ? 'activate' : 'deactivate', 'user', userId, 'user');
+  toast(active ? 'User activated.' : 'User deactivated.', 'success');
+  // Table updates automatically via the real-time listener — no re-render needed
 }
 
 // ══════════════════════════════════════════════════════
@@ -1844,6 +1973,10 @@ async function renderAudit() {
 // ══════════════════════════════════════════════════════
 
 async function handleRoute() {
+  // Tear down any users real-time listener when navigating away from that page
+  if (_usersUnsubscribe && matchRoute(window.location.hash).page !== 'admin-users') {
+    _usersUnsubscribe(); _usersUnsubscribe = null;
+  }
   const route = matchRoute(window.location.hash);
 
   // Redirect to login if not signed in
@@ -1855,8 +1988,8 @@ async function handleRoute() {
   // Already signed in → redirect away from login
   if (route.page === 'login' && S.user) { nav('/'); return; }
 
-  // Admin-only guard
-  if (route.admin && !isAdmin()) {
+  // Admin/Management-only guard
+  if (route.admin && !isManagement()) {
     render(pageShell('dashboard', `<div class="empty-state"><div class="empty-icon">🔒</div><h3>Admin access required</h3><p>You do not have permission to view this page.</p><a class="btn btn-secondary" href="#/">Go to Dashboard</a></div>`));
     return;
   }
