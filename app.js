@@ -690,47 +690,55 @@ async function renderDashboard() {
 //  14.  PAGE: DOCUMENTS LIST
 // ══════════════════════════════════════════════════════
 
+// Classify a document's latest revision into a tab bucket
+function docTabBucket(latestRev) {
+  if (!latestRev) return 'concept';
+  const st = latestRev.status || '';
+  if (st === 'final_approved' || latestRev.finalApproved) return 'approved';
+  if (st === 'approved')                                   return 'approved';
+  if (st === 'new_revision_required' || latestRev.approvalStatus === 'not_approved') return 'not_approved';
+  if (st === 'awaiting_response')                          return 'awaiting_response';
+  if (st === 'response_received' || st === 'comments_received') return 'awaiting_response';
+  if (st === 'submitted')                                  return 'awaiting_response';
+  return 'concept'; // concept or unknown
+}
+
 async function renderDocuments(qs = {}) {
   const [projects, allRevSnap] = await Promise.all([getProjects(), db.collection('revisions').get()]);
 
-  // Build filter state from URL query params (via hash fragment)
   const params = qs;
 
-  // fetch matching docs (excluding soft-deleted)
-  let docs = await getAccessibleDocuments(params);
-  docs = docs.filter(d => !d.isDeleted);
-
-  // Build latest revision status per document
+  // ── Build latest-revision lookup from ALL revisions ──────────────
   const latestRevStatus = {};
   allRevSnap.docs.forEach(d => {
-    const r = d.data();
+    const r = { id: d.id, ...d.data() };
     const docId = r.documentId;
     if (!latestRevStatus[docId] || (r.revisionNumber || 0) > (latestRevStatus[docId].revisionNumber || 0)) {
       latestRevStatus[docId] = r;
     }
   });
 
-  // Apply status filter (revStatus)
-  if (params.revStatus) {
-    docs = docs.filter(doc => {
-      const latest = latestRevStatus[doc.id];
-      if (!latest) return params.revStatus === 'all';
-      const st = latest.status || '';
-      switch (params.revStatus) {
-        case 'awaiting_response': return st === 'awaiting_response';
-        case 'approved':          return st === 'approved' || st === 'final_approved' || latest.finalApproved;
-        case 'final_approved':    return st === 'final_approved' || latest.finalApproved;
-        case 'not_approved':      return st === 'new_revision_required' || latest.approvalStatus === 'not_approved';
-        default: return true;
-      }
-    });
-  }
+  // ── Fetch ALL accessible non-deleted docs for tab counts ─────────
+  const allDocs = (await getAccessibleDocuments(params)).filter(d => !d.isDeleted);
 
-  // Project map for display
+  // ── Compute tab counts ───────────────────────────────────────────
+  const tabCounts = { all: allDocs.length, awaiting_response: 0, approved: 0, not_approved: 0, concept: 0 };
+  allDocs.forEach(doc => {
+    const bucket = docTabBucket(latestRevStatus[doc.id]);
+    if (tabCounts[bucket] !== undefined) tabCounts[bucket]++;
+  });
+
+  // ── Filter docs for the active tab ──────────────────────────────
+  const activeTab = params.revStatus || 'all';
+  let docs = activeTab === 'all'
+    ? allDocs
+    : allDocs.filter(doc => docTabBucket(latestRevStatus[doc.id]) === activeTab);
+
+  // ── Project map for display ──────────────────────────────────────
   const pmap = {};
   projects.forEach(p => { pmap[p.id] = p; });
 
-  // Sort
+  // ── Sort ─────────────────────────────────────────────────────────
   const sortField = params._sort || 'documentNumber';
   const sortDir   = params._dir  || 'asc';
   docs.sort((a,b) => {
@@ -739,31 +747,44 @@ async function renderDocuments(qs = {}) {
     return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
   });
 
+  // ── Filter bar dropdowns ─────────────────────────────────────────
   const projectOptions = projects.map(p =>
     `<option value="${esc(p.id)}" ${params.projectId === p.id ? 'selected' : ''}>
       ${esc(p.projectNumber)} — ${esc(p.name)}
     </option>`).join('');
-
   const discOptions = DISCIPLINES.filter(Boolean).map(d =>
     `<option value="${esc(d)}" ${params.discipline === d ? 'selected' : ''}>${esc(d)}</option>`).join('');
-
   const stateOptions = DOC_STATES.map(s =>
     `<option value="${esc(s)}" ${params.state === s ? 'selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('');
 
-  const statusFilterOptions = [
-    { value:'',                label:'All Statuses' },
-    { value:'awaiting_response', label:'Awaiting Response' },
-    { value:'approved',          label:'Approved' },
-    { value:'final_approved',    label:'Final Approved' },
-    { value:'not_approved',      label:'Not Approved' },
-  ].map(o => `<option value="${esc(o.value)}" ${params.revStatus === o.value ? 'selected':''}>${esc(o.label)}</option>`).join('');
+  // ── Status tabs ──────────────────────────────────────────────────
+  const tabs = [
+    { key:'all',               label:'All' },
+    { key:'awaiting_response', label:'Awaiting Response' },
+    { key:'approved',          label:'Approved' },
+    { key:'not_approved',      label:'Not Approved' },
+    { key:'concept',           label:'In Progress' },
+  ];
+  const tabBar = tabs.map(t => {
+    const cnt = tabCounts[t.key] ?? 0;
+    const active = activeTab === t.key;
+    return `<button type="button"
+      class="doc-tab${active ? ' doc-tab--active' : ''}"
+      onclick="switchDocTab('${t.key}')">
+      ${esc(t.label)} <span class="doc-tab-count">${cnt}</span>
+    </button>`;
+  }).join('');
 
+  // ── Table rows ───────────────────────────────────────────────────
   const rows = docs.map(doc => {
     const proj = pmap[doc.projectId];
     const projLabel = proj ? `${esc(proj.projectNumber)} — ${esc(proj.name)}` : esc(doc.projectId || '—');
     const latestRev = latestRevStatus[doc.id];
     const stBadge = latestRev ? revStatusBadge(latestRev) : badge('No Rev','badge-muted');
     const ownerDisplay = doc.primaryOwnerName || doc.responsibleName || '—';
+    const approveBtn = isManagement() && latestRev && latestRev.status !== 'approved' && latestRev.status !== 'final_approved'
+      ? `<button class="btn btn-link btn-sm" title="Mark latest revision approved" onclick="event.stopPropagation();quickApprove('${esc(doc.id)}','${esc(latestRev.id)}')">✓ Approve</button>`
+      : '';
     return `<tr onclick="nav('/documents/${esc(doc.id)}')" style="cursor:pointer">
       <td class="nowrap"><a href="#/documents/${esc(doc.id)}" onclick="event.stopPropagation()">${esc(doc.documentNumber)}</a></td>
       <td class="title-cell">
@@ -779,20 +800,27 @@ async function renderDocuments(qs = {}) {
         <a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}">View</a>
         ${isManagement() ? `<a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}/edit">Edit</a>` : ''}
         ${isAdmin() ? `<a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}/allocation">Alloc</a>` : ''}
+        ${approveBtn}
       </td>
     </tr>`;
   }).join('');
+
+  // ── Render page ──────────────────────────────────────────────────
+  // Store current filter params so tab switches preserve them
+  window._docFilterParams = { ...params };
 
   render(pageShell('documents', `
     <div class="page-header">
       <div>
         <h1>Documents</h1>
-        <p>${docs.length} document${docs.length !== 1 ? 's' : ''} ${isManagement() ? 'total' : 'assigned to you'}</p>
+        <p>${allDocs.length} document${allDocs.length !== 1 ? 's' : ''} ${isManagement() ? 'total' : 'assigned to you'}</p>
       </div>
       <div class="header-actions">
         ${isManagement() ? `<a class="btn btn-primary" href="#/documents/new">+ Add Document</a>` : ''}
       </div>
     </div>
+
+    <div class="doc-tabs">${tabBar}</div>
 
     <form class="filter-bar" onsubmit="applyDocFilters(event)">
       <input type="search" id="f-search" placeholder="Search document number, title…" value="${esc(params.search||'')}">
@@ -807,9 +835,6 @@ async function renderDocuments(qs = {}) {
       <select id="f-state">
         <option value="">All states</option>
         ${stateOptions}
-      </select>
-      <select id="f-revStatus">
-        ${statusFilterOptions}
       </select>
       <button type="submit" class="btn btn-primary">Filter</button>
       <button type="button" class="btn btn-ghost" onclick="nav('/documents')">Reset</button>
@@ -833,33 +858,64 @@ async function renderDocuments(qs = {}) {
           <tbody>
             ${rows || `<tr><td colspan="8"><div class="empty-state">
               <div class="empty-icon">📄</div>
-              <h3>No documents found</h3>
-              <p>Try adjusting your filters${isManagement() ? ' or add a new document' : ''}.</p>
+              <h3>No documents</h3>
+              <p>${activeTab === 'all' ? (isManagement() ? 'Add a new document to get started.' : 'No documents have been assigned to you yet.') : 'No documents in this status.'}</p>
             </div></td></tr>`}
           </tbody>
         </table>
       </div>
       <div style="padding:10px 14px;color:var(--muted);font-size:12px">
-        Showing ${docs.length} document${docs.length !== 1 ? 's' : ''}
+        Showing ${docs.length} of ${allDocs.length} document${allDocs.length !== 1 ? 's' : ''}
       </div>
     </div>
   `));
 }
 
+// Switch between status tabs, preserving search/project/discipline filters
+function switchDocTab(tabKey) {
+  const base = window._docFilterParams || {};
+  const params = { ...base };
+  if (tabKey && tabKey !== 'all') params.revStatus = tabKey;
+  else delete params.revStatus;
+  renderDocuments(params);
+}
+
 function applyDocFilters(e) {
   if (e) e.preventDefault();
-  const search = document.getElementById('f-search').value.trim();
-  const projectId = document.getElementById('f-project').value;
+  const search     = document.getElementById('f-search').value.trim();
+  const projectId  = document.getElementById('f-project').value;
   const discipline = document.getElementById('f-disc').value;
-  const state = document.getElementById('f-state').value;
-  const revStatus = document.getElementById('f-revStatus').value;
+  const state      = document.getElementById('f-state').value;
+  // preserve active tab
+  const activeTab  = (window._docFilterParams || {}).revStatus || '';
   const params = {};
-  if (search) params.search = search;
-  if (projectId) params.projectId = projectId;
+  if (search)     params.search     = search;
+  if (projectId)  params.projectId  = projectId;
   if (discipline) params.discipline = discipline;
-  if (state) params.state = state;
-  if (revStatus) params.revStatus = revStatus;
+  if (state)      params.state      = state;
+  if (activeTab)  params.revStatus  = activeTab;
   renderDocuments(params);
+}
+
+// Quick-approve latest revision from the document list
+async function quickApprove(docId, revId) {
+  if (!confirm('Mark the latest revision as Approved?')) return;
+  try {
+    const ts = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('revisions').doc(revId).update({
+      status:        'approved',
+      approvalStatus:'approved',
+      finalApproved: false,
+      updatedAt: ts, updatedBy: S.user.uid
+    });
+    await writeAudit('update','revision',revId,'Quick-approved');
+    toast('Revision marked as Approved.','success');
+    // Re-render current tab
+    const params = window._docFilterParams || {};
+    renderDocuments(params);
+  } catch (ex) {
+    toast('Error: ' + ex.message, 'error');
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -1506,40 +1562,49 @@ async function saveAllocation(e, docId) {
 // ══════════════════════════════════════════════════════
 
 async function renderProjects() {
-  const [projects, allDocsSnap] = await Promise.all([
+  const [projects, allDocsSnap, users] = await Promise.all([
     getProjects(),
-    db.collection('documents').get()
+    db.collection('documents').get(),
+    getUsers()
   ]);
   const docCount = {};
   allDocsSnap.docs.forEach(d => {
     const pid = d.data().projectId;
     docCount[pid] = (docCount[pid] || 0) + 1;
   });
+  const umap = {};
+  users.forEach(u => { umap[u.id] = u; });
 
-  const rows = projects.map(p => `
+  const rows = projects.map(p => {
+    const pm = p.projectManagerId ? umap[p.projectManagerId] : null;
+    const pmName = pm ? pm.displayName : (p.projectManagerName || '—');
+    return `
     <tr onclick="nav('/projects/${esc(p.id)}')" style="cursor:pointer">
       <td><a href="#/projects/${esc(p.id)}" onclick="event.stopPropagation()">${esc(p.projectNumber)}</a></td>
       <td class="title-cell"><strong>${esc(p.name)}</strong></td>
       <td>${esc(p.clientName||'—')}</td>
+      <td>${esc(pmName)}</td>
       <td style="text-align:right">${docCount[p.id]||0}</td>
       <td>${p.active ? badge('Active','badge-success') : badge('Inactive','badge-muted')}</td>
       <td class="actions-cell">
         ${isAdmin() ? `<button class="btn btn-link btn-sm" onclick="event.stopPropagation();editProject('${esc(p.id)}')">Edit</button>` : ''}
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   render(pageShell('projects', `
     <div class="page-header">
       <div><h1>Projects</h1><p>${projects.length} projects</p></div>
       <div class="header-actions">
+        ${isAdmin() ? `<button class="btn btn-secondary" onclick="showProjectImportModal()">⬆ Bulk Import</button>` : ''}
         ${isAdmin() ? `<button class="btn btn-primary" onclick="showNewProjectModal()">+ Add Project</button>` : ''}
       </div>
     </div>
     <div class="panel table-panel">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Project #</th><th>Name</th><th>Client</th><th style="text-align:right">Docs</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏗️</div><h3>No projects yet</h3></div></td></tr>`}</tbody>
+          <thead><tr><th>Project #</th><th>Name</th><th>Client</th><th>Project Manager</th><th style="text-align:right">Docs</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🏗️</div><h3>No projects yet</h3></div></td></tr>`}</tbody>
         </table>
       </div>
     </div>
@@ -1548,8 +1613,12 @@ async function renderProjects() {
 }
 
 async function renderProjectDetail(projectId) {
-  const [proj, docs] = await Promise.all([getProject(projectId), getAccessibleDocuments({projectId})]);
+  const [proj, docs, users] = await Promise.all([getProject(projectId), getAccessibleDocuments({projectId}), getUsers()]);
   if (!proj) { render(pageShell('projects',`<div class="empty-state"><h3>Project not found</h3><a class="btn btn-secondary" href="#/projects">← Back</a></div>`)); return; }
+
+  const umap = {}; users.forEach(u => { umap[u.id] = u; });
+  const pm = proj.projectManagerId ? umap[proj.projectManagerId] : null;
+  const pmName = pm ? pm.displayName : (proj.projectManagerName || '—');
 
   const rows = docs.filter(d => !d.isDeleted).map(doc => `
     <tr onclick="nav('/documents/${esc(doc.id)}')" style="cursor:pointer">
@@ -1568,6 +1637,7 @@ async function renderProjectDetail(projectId) {
       <div class="detail-grid">
         <div class="detail-item"><label>Project Number</label><span>${esc(proj.projectNumber)}</span></div>
         <div class="detail-item"><label>Client</label><span>${esc(proj.clientName||'—')}</span></div>
+        <div class="detail-item"><label>Project Manager</label><span>${esc(pmName)}</span></div>
         <div class="detail-item"><label>Status</label><span>${proj.active ? badge('Active','badge-success') : badge('Inactive','badge-muted')}</span></div>
         <div class="detail-item"><label>Warning Days</label><span>${esc(proj.warningDays||7)} days</span></div>
       </div>
@@ -1588,19 +1658,26 @@ async function renderProjectDetail(projectId) {
   `));
 }
 
-function showNewProjectModal() {
-  showProjectModal(null);
+async function showNewProjectModal() {
+  const users = await getUsers();
+  showProjectModal(null, users);
 }
 
-function editProject(id) {
-  db.collection('projects').doc(id).get().then(snap => {
-    if (snap.exists) showProjectModal({ id: snap.id, ...snap.data() });
-  });
+async function editProject(id) {
+  const [snap, users] = await Promise.all([
+    db.collection('projects').doc(id).get(),
+    getUsers()
+  ]);
+  if (snap.exists) showProjectModal({ id: snap.id, ...snap.data() }, users);
 }
 
-function showProjectModal(proj) {
+function showProjectModal(proj, users = []) {
   const slot = document.getElementById('modal-slot');
   if (!slot) return;
+  const activeUsers = users.filter(u => u.isActive !== false);
+  const pmOptions = activeUsers.map(u =>
+    `<option value="${esc(u.id)}" data-name="${esc(u.displayName)}" ${proj?.projectManagerId === u.id ? 'selected':''}>${esc(u.displayName)} (${esc(ROLE_LABELS[u.role]||u.role)})</option>`
+  ).join('');
   slot.innerHTML = `
   <div class="modal-backdrop" onclick="closeModal(event)">
     <div class="modal" onclick="event.stopPropagation()">
@@ -1610,9 +1687,16 @@ function showProjectModal(proj) {
       </div>
       <div class="modal-body">
         <form onsubmit="saveProject(event,${proj ? `'${esc(proj.id)}'` : 'null'})">
-          <div class="form-group"><label>Project Number *</label><input id="mp-num" value="${esc(proj?.projectNumber||'')}" required placeholder="26001"></div>
-          <div class="form-group"><label>Project Name *</label><input id="mp-name" value="${esc(proj?.name||'')}" required placeholder="Project name"></div>
+          <div class="form-group"><label>Project Number <span style="color:var(--red)">*</span></label><input id="mp-num" value="${esc(proj?.projectNumber||'')}" required placeholder="26001"></div>
+          <div class="form-group"><label>Project Name <span style="color:var(--red)">*</span></label><input id="mp-name" value="${esc(proj?.name||'')}" required placeholder="Project name"></div>
           <div class="form-group"><label>Client Name</label><input id="mp-client" value="${esc(proj?.clientName||'')}" placeholder="Client company"></div>
+          <div class="form-group">
+            <label>Project Manager</label>
+            <select id="mp-pm">
+              <option value="">— None —</option>
+              ${pmOptions}
+            </select>
+          </div>
           <div class="form-group"><label>Warning Days</label><input type="number" id="mp-warn" value="${esc(proj?.warningDays||7)}" min="1" max="90"></div>
           <div class="form-group"><div class="check-group"><input type="checkbox" id="mp-active" ${!proj||proj.active?'checked':''}><label for="mp-active">Active</label></div></div>
           <div class="form-actions">
@@ -1629,12 +1713,17 @@ function showProjectModal(proj) {
 async function saveProject(e, projId) {
   e.preventDefault();
   const err = document.getElementById('proj-err');
+  const pmSel = document.getElementById('mp-pm');
+  const projectManagerId   = pmSel?.value || null;
+  const projectManagerName = pmSel?.selectedOptions[0]?.dataset?.name || '';
   const data = {
-    projectNumber: document.getElementById('mp-num').value.trim(),
-    name: document.getElementById('mp-name').value.trim(),
-    clientName: document.getElementById('mp-client').value.trim(),
-    warningDays: parseInt(document.getElementById('mp-warn').value) || 7,
-    active: document.getElementById('mp-active').checked,
+    projectNumber:       document.getElementById('mp-num').value.trim(),
+    name:                document.getElementById('mp-name').value.trim(),
+    clientName:          document.getElementById('mp-client').value.trim(),
+    projectManagerId:    projectManagerId,
+    projectManagerName:  projectManagerName,
+    warningDays:         parseInt(document.getElementById('mp-warn').value) || 7,
+    active:              document.getElementById('mp-active').checked,
   };
   try {
     // Project closure check: warn if marking inactive and not all docs approved
@@ -1673,6 +1762,170 @@ async function saveProject(e, projId) {
 function closeModal(e) {
   if (e && e.target !== document.querySelector('.modal-backdrop')) return;
   document.getElementById('modal-slot')?.remove() || (document.querySelector('.modal-backdrop')?.remove());
+}
+
+// ── Project Bulk Import ────────────────────────────────
+
+let _projImportRows = [];
+
+function downloadProjectTemplate() {
+  const headers = ['Project Number', 'Name', 'Client', 'Project Manager Name', 'Status'];
+  const sample  = ['26001', 'Substation Extension', 'ACME Corp', 'Jane Doe', 'Active'];
+  const notes   = [
+    ['Project Number: unique identifier, e.g. 26001'],
+    ['Status: Active or Inactive (default Active)'],
+    ['Project Manager Name: must match an existing user display name exactly'],
+    ['If a project number already exists it will be UPDATED, not duplicated'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample, [], ['--- NOTES ---'], ...notes]);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 4, 24) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Projects Template');
+  XLSX.writeFile(wb, 'DCI_Projects_Import_Template.xlsx');
+}
+
+async function showProjectImportModal() {
+  const slot = document.getElementById('modal-slot');
+  if (!slot) return;
+  slot.innerHTML = `
+  <div class="modal-backdrop" onclick="closeModal(event)">
+    <div class="modal" style="max-width:640px" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Bulk Import Projects</h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-info" style="margin-bottom:12px;font-size:13px">
+          Upload an Excel file with columns: <strong>Project Number, Name, Client, Project Manager Name, Status</strong>.
+          Existing project numbers will be updated; new ones will be created.
+        </div>
+        <div class="form-group" style="display:flex;gap:10px;align-items:center">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="downloadProjectTemplate()">⬇ Download Template</button>
+          <input type="file" id="proj-imp-file" accept=".xlsx,.xls,.csv" onchange="previewProjectImport(this)">
+        </div>
+        <div id="proj-imp-preview"></div>
+        <div id="proj-imp-actions" style="display:none" class="form-actions">
+          <button type="button" class="btn btn-primary" id="proj-imp-btn" onclick="doProjectImport()">Import Now</button>
+          <button type="button" class="btn btn-secondary" onclick="clearProjectImport()">Clear</button>
+          <span class="form-error" id="proj-imp-err"></span>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  _projImportRows = [];
+}
+
+function clearProjectImport() {
+  _projImportRows = [];
+  const f = document.getElementById('proj-imp-file');
+  if (f) f.value = '';
+  const p = document.getElementById('proj-imp-preview');
+  if (p) p.innerHTML = '';
+  const a = document.getElementById('proj-imp-actions');
+  if (a) a.style.display = 'none';
+}
+
+function previewProjectImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      _projImportRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      const preview = document.getElementById('proj-imp-preview');
+      if (!_projImportRows.length) {
+        preview.innerHTML = '<p class="form-error">No rows found in file.</p>';
+        document.getElementById('proj-imp-actions').style.display = 'none';
+        return;
+      }
+      const heads = ['Project Number','Name','Client','Project Manager Name','Status'];
+      const tableRows = _projImportRows.slice(0,10).map(r => `
+        <tr>
+          <td>${esc(String(normalize(r,'project number')||''))}</td>
+          <td>${esc(String(normalize(r,'name')||''))}</td>
+          <td>${esc(String(normalize(r,'client')||''))}</td>
+          <td>${esc(String(normalize(r,'project manager name')||normalize(r,'project manager')||''))}</td>
+          <td>${esc(String(normalize(r,'status')||'Active'))}</td>
+        </tr>`).join('');
+      preview.innerHTML = `
+        <p style="font-size:13px;margin:8px 0 4px"><strong>${_projImportRows.length}</strong> rows detected (showing first 10):</p>
+        <div class="table-wrap" style="max-height:220px;overflow-y:auto">
+          <table>
+            <thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>`;
+      document.getElementById('proj-imp-actions').style.display = 'flex';
+    } catch(ex) {
+      document.getElementById('proj-imp-preview').innerHTML = `<p class="form-error">Could not read file: ${esc(ex.message)}</p>`;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function doProjectImport() {
+  if (!_projImportRows.length) return;
+  const btn = document.getElementById('proj-imp-btn');
+  const err = document.getElementById('proj-imp-err');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  try {
+    // Load users for PM name → id lookup
+    const users = await getUsers();
+    const uByName = {};
+    users.forEach(u => { uByName[u.displayName.trim().toLowerCase()] = u; });
+
+    // Load existing projects for update-vs-create decision
+    const existingSnap = await db.collection('projects').get();
+    const projByNum = {};
+    existingSnap.docs.forEach(d => { projByNum[String(d.data().projectNumber).trim()] = d.id; });
+
+    let created = 0, updated = 0, skipped = 0;
+    for (const row of _projImportRows) {
+      const projNum  = String(normalize(row,'project number')||normalize(row,'projectnumber')||'').trim();
+      const name     = String(normalize(row,'name')||normalize(row,'project name')||'').trim();
+      if (!projNum || !name) { skipped++; continue; }
+
+      const clientName  = String(normalize(row,'client')||normalize(row,'client name')||'').trim();
+      const pmNameRaw   = String(normalize(row,'project manager name')||normalize(row,'project manager')||'').trim();
+      const pmUser      = pmNameRaw ? uByName[pmNameRaw.toLowerCase()] : null;
+      const rawStatus   = String(normalize(row,'status')||'Active').trim().toLowerCase();
+      const active      = rawStatus !== 'inactive';
+
+      const data = {
+        projectNumber:       projNum,
+        name,
+        clientName,
+        projectManagerId:    pmUser ? pmUser.id : null,
+        projectManagerName:  pmUser ? pmUser.displayName : pmNameRaw,
+        active,
+        warningDays:         7,
+        updatedAt:           firebase.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (projByNum[projNum]) {
+        await db.collection('projects').doc(projByNum[projNum]).update(data);
+        await writeAudit('update','project',projByNum[projNum],projNum);
+        updated++;
+      } else {
+        data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+        data.createdBy = S.user.uid;
+        const ref = await db.collection('projects').add(data);
+        await writeAudit('create','project',ref.id,projNum);
+        projByNum[projNum] = ref.id;
+        created++;
+      }
+    }
+
+    invalidateCache();
+    toast(`Import complete — ${created} created, ${updated} updated${skipped ? `, ${skipped} skipped` : ''}.`, 'success');
+    closeModal();
+    renderProjects();
+  } catch (ex) {
+    err.textContent = 'Error: ' + ex.message;
+    btn.disabled = false; btn.textContent = 'Import Now';
+  }
 }
 
 // ══════════════════════════════════════════════════════
