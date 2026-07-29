@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DCI – User Manager</title>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f4f8; min-height: 100vh; }
+    .header { background: #1e3a5f; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+    .header h1 { font-size: 1.2rem; font-weight: 600; }
+    .header small { opacity: .7; font-size: .8rem; }
+    .container { max-width: 780px; margin: 32px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.08); margin-bottom: 24px; overflow: hidden; }
+    .card-header { background: #f7f9fc; border-bottom: 1px solid #e2e8f0; padding: 14px 20px; font-weight: 600; color: #2d3748; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
+    .card-body { padding: 20px; }
+    label { display: block; font-size: .85rem; font-weight: 600; color: #4a5568; margin-bottom: 5px; margin-top: 14px; }
+    label:first-child { margin-top: 0; }
+    input, select { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: .9rem; color: #2d3748; outline: none; transition: border .2s; }
+    input:focus, select:focus { border-color: #3182ce; box-shadow: 0 0 0 3px rgba(49,130,206,.15); }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .btn { display: inline-block; padding: 10px 22px; border: none; border-radius: 6px; font-size: .9rem; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary { background: #3182ce; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #2b6cb0; }
+    .btn-success { background: #38a169; color: #fff; }
+    .btn-success:hover:not(:disabled) { background: #2f855a; }
+    .btn-orange { background: #dd6b20; color: #fff; }
+    .btn-orange:hover:not(:disabled) { background: #c05621; }
+    .mt { margin-top: 16px; }
+    .msg { padding: 10px 14px; border-radius: 6px; font-size: .875rem; margin-top: 12px; display: none; }
+    .msg.ok  { background: #f0fff4; border: 1px solid #9ae6b4; color: #276749; display: block; }
+    .msg.err { background: #fff5f5; border: 1px solid #feb2b2; color: #c53030; display: block; }
+    table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+    th { background: #edf2f7; text-align: left; padding: 10px 12px; color: #4a5568; font-weight: 600; }
+    td { padding: 10px 12px; border-bottom: 1px solid #f0f4f8; color: #2d3748; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: .75rem; font-weight: 600; }
+    .badge-admin { background: #ebf8ff; color: #2b6cb0; }
+    .badge-management { background: #e9d8fd; color: #553c9a; }
+    .badge-pm { background: #fefcbf; color: #744210; }
+    .badge-dc { background: #e6fffa; color: #234e52; }
+    .badge-eng { background: #fff5f0; color: #7b341e; }
+    .badge-viewer { background: #f7fafc; color: #718096; border: 1px solid #e2e8f0; }
+    .hint { font-size: .8rem; color: #718096; margin-top: 4px; }
+    #login-section { display: block; }
+    #main-section  { display: none; }
+    .signout-btn { margin-left: auto; background: transparent; border: 1px solid rgba(255,255,255,.4); color: #fff; padding: 5px 14px; border-radius: 4px; font-size: .8rem; cursor: pointer; }
+    .signout-btn:hover { background: rgba(255,255,255,.1); }
+    .divider { border: none; border-top: 1px solid #e2e8f0; margin: 20px 0; }
+    .loading { color: #718096; padding: 16px; text-align: center; font-size: .875rem; }
+    .notice { background: #fffbeb; border: 1px solid #f6e05e; border-radius: 8px; padding: 14px 16px; font-size: .85rem; color: #744210; margin-bottom: 20px; line-height: 1.5; }
+    .notice strong { display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>DCI — User Manager</h1>
+    <small>Standalone admin tool · does not affect your main app login</small>
+  </div>
+  <button class="signout-btn" id="signout-btn" style="display:none" onclick="doSignOut()">Sign Out</button>
+</div>
+
+<div class="container">
+
+  <!-- LOGIN -->
+  <div id="login-section" class="card">
+    <div class="card-header">🔐 Sign in as Admin</div>
+    <div class="card-body">
+      <label>Admin Email</label>
+      <input type="email" id="l-email" placeholder="admin@example.com">
+      <label>Password</label>
+      <input type="password" id="l-pass" placeholder="••••••••">
+      <div class="msg" id="l-msg"></div>
+      <button class="btn btn-primary mt" id="l-btn" onclick="doLogin()">Sign In</button>
+    </div>
+  </div>
+
+  <!-- MAIN (shown after login) -->
+  <div id="main-section">
+
+    <div class="notice" id="orphan-notice" style="display:none">
+      <strong>⚠️ You have users created earlier that are missing from the system list.</strong>
+      These users can log in but they don't appear in the app's Users page and have no assigned role.
+      Use the <strong>"Register Existing User"</strong> section below to fix them.
+    </div>
+
+    <!-- EXISTING USERS TABLE -->
+    <div class="card">
+      <div class="card-header">👥 Current Users in System</div>
+      <div class="card-body" style="padding:0">
+        <div class="loading" id="users-loading">Loading users…</div>
+        <table id="users-table" style="display:none">
+          <thead>
+            <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr>
+          </thead>
+          <tbody id="users-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- CREATE NEW USER -->
+    <div class="card">
+      <div class="card-header">➕ Create New User</div>
+      <div class="card-body">
+        <div class="row2">
+          <div>
+            <label>Full Name</label>
+            <input type="text" id="n-name" placeholder="e.g. John Smith">
+          </div>
+          <div>
+            <label>Email Address</label>
+            <input type="email" id="n-email" placeholder="john@company.com">
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label>Password (temporary)</label>
+            <input type="password" id="n-pass" placeholder="Min 6 characters">
+          </div>
+          <div>
+            <label>Role</label>
+            <select id="n-role">
+              <option value="admin">Admin – full access, manage users</option>
+              <option value="management">Management / Director – view all</option>
+              <option value="project_manager">Project Manager</option>
+              <option value="document_controller">Document Controller</option>
+              <option value="engineer">Engineer</option>
+              <option value="viewer">Viewer – read only</option>
+            </select>
+          </div>
+        </div>
+        <div class="msg" id="n-msg"></div>
+        <button class="btn btn-success mt" id="n-btn" onclick="createUser()">Create User</button>
+      </div>
+    </div>
+
+    <!-- REGISTER EXISTING AUTH USER -->
+    <div class="card">
+      <div class="card-header">🔧 Register Existing User (Fix Missing Users)</div>
+      <div class="card-body">
+        <p style="font-size:.85rem;color:#4a5568;margin-bottom:12px">
+          Use this for users you already created before (they can log in but don't appear in the users list).
+          You need their <strong>User UID</strong> from Firebase Console.
+        </p>
+        <div class="notice" style="margin-bottom:16px">
+          <strong>How to get the User UID:</strong>
+          1. Go to <a href="https://console.firebase.google.com" target="_blank" style="color:#2b6cb0">console.firebase.google.com</a><br>
+          2. Select your project → <strong>Authentication</strong> → <strong>Users</strong> tab<br>
+          3. Find the user by email → the long string in the <strong>User UID</strong> column is what you need
+        </div>
+        <label>User UID (from Firebase Console)</label>
+        <input type="text" id="r-uid" placeholder="e.g. abc123xyz...">
+        <div class="row2">
+          <div>
+            <label>Full Name</label>
+            <input type="text" id="r-name" placeholder="e.g. Jane Director">
+          </div>
+          <div>
+            <label>Email Address</label>
+            <input type="email" id="r-email" placeholder="jane@company.com">
+          </div>
+        </div>
+        <label>Role</label>
+        <select id="r-role">
+          <option value="admin">Admin – full access, manage users</option>
+          <option value="management">Management / Director – view all</option>
+          <option value="project_manager">Project Manager</option>
+          <option value="document_controller">Document Controller</option>
+          <option value="engineer">Engineer</option>
+          <option value="viewer">Viewer – read only</option>
+        </select>
+        <div class="msg" id="r-msg"></div>
+        <button class="btn btn-orange mt" id="r-btn" onclick="registerUser()">Register This User</button>
+      </div>
+    </div>
+
+  </div><!-- end main-section -->
+</div><!-- end container -->
+
+<script>
+// ── Config auto-detect ──────────────────────────────────────────────
+let db, auth, currentUser, apiKey;
+
+async function init() {
+  // Load Firebase config from app.js (same domain)
+  let cfg;
+  try {
+    const raw = await fetch('/app.js').then(r => r.text());
+    const m = raw.match(/const\s+FIREBASE_CONFIG\s*=\s*(\{[\s\S]*?\});/);
+    if (!m) throw new Error('Config block not found');
+    cfg = new Function('"use strict"; return (' + m[1] + ')')();
+  } catch (e) {
+    showMsg('l-msg', 'err', 'Could not load Firebase config from app.js: ' + e.message);
+    return;
+  }
+
+  // Avoid double-init if app.js already ran (shouldn't happen in this standalone page)
+  try {
+    firebase.initializeApp(cfg);
+  } catch(e) {
+    // already initialized — use default app
+  }
+
+  auth = firebase.auth();
+  db   = firebase.firestore();
+  apiKey = cfg.apiKey;
+}
+
+init();
+
+// ── Auth ────────────────────────────────────────────────────────────
+async function doLogin() {
+  const btn = document.getElementById('l-btn');
+  const email = document.getElementById('l-email').value.trim();
+  const pass  = document.getElementById('l-pass').value;
+  if (!email || !pass) { showMsg('l-msg','err','Enter email and password.'); return; }
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const cred = await auth.signInWithEmailAndPassword(email, pass);
+    currentUser = cred.user;
+    // Check role
+    const snap = await db.collection('users').doc(currentUser.uid).get();
+    if (!snap.exists) { showMsg('l-msg','err','Your account is not set up in the system. Contact support.'); auth.signOut(); btn.disabled=false; btn.textContent='Sign In'; return; }
+    const role = snap.data().role;
+    if (role !== 'admin' && role !== 'management') {
+      showMsg('l-msg','err','Only Admin or Management accounts can use this tool.');
+      auth.signOut(); btn.disabled=false; btn.textContent='Sign In'; return;
+    }
+    document.getElementById('login-section').style.display = 'none';
+    document.getElementById('main-section').style.display  = 'block';
+    document.getElementById('signout-btn').style.display   = 'inline-block';
+    loadUsers();
+  } catch(e) {
+    const msgs = { 'auth/invalid-credential':'Wrong email or password.', 'auth/user-not-found':'No account with that email.', 'auth/wrong-password':'Wrong password.' };
+    showMsg('l-msg','err', msgs[e.code] || e.message);
+    btn.disabled=false; btn.textContent='Sign In';
+  }
+}
+
+function doSignOut() {
+  auth.signOut();
+  location.reload();
+}
+
+// ── Load & display users ────────────────────────────────────────────
+async function loadUsers() {
+  try {
+    const snap = await db.collection('users').orderBy('displayName').get();
+    const tbody = document.getElementById('users-tbody');
+    tbody.innerHTML = '';
+    if (snap.empty) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#718096;padding:20px">No users found</td></tr>';
+    } else {
+      snap.forEach(doc => {
+        const u = doc.data();
+        tbody.innerHTML += `<tr>
+          <td><strong>${esc(u.displayName || '—')}</strong></td>
+          <td>${esc(u.email || '—')}</td>
+          <td>${roleBadge(u.role)}</td>
+          <td>${u.isActive === false ? '<span style="color:#e53e3e">Inactive</span>' : '<span style="color:#38a169">Active</span>'}</td>
+        </tr>`;
+      });
+    }
+    document.getElementById('users-loading').style.display = 'none';
+    document.getElementById('users-table').style.display   = 'table';
+  } catch(e) {
+    document.getElementById('users-loading').textContent = 'Error loading users: ' + e.message;
+  }
+}
+
+// ── Create new user ─────────────────────────────────────────────────
+async function createUser() {
+  const btn   = document.getElementById('n-btn');
+  const name  = document.getElementById('n-name').value.trim();
+  const email = document.getElementById('n-email').value.trim();
+  const pass  = document.getElementById('n-pass').value;
+  const role  = document.getElementById('n-role').value;
+
+  if (!name)  { showMsg('n-msg','err','Enter the user\'s name.'); return; }
+  if (!email) { showMsg('n-msg','err','Enter the user\'s email.'); return; }
+  if (!pass || pass.length < 6) { showMsg('n-msg','err','Password must be at least 6 characters.'); return; }
+
+  btn.disabled=true; btn.textContent='Creating…';
+  hideMsg('n-msg');
+
+  try {
+    // Create Auth account via REST — does NOT sign out the current admin
+    const resp = await fetch(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + apiKey,
+      { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email, password: pass, returnSecureToken: true }) }
+    );
+    const data = await resp.json();
+    if (data.error) {
+      const msg = data.error.message || 'Unknown error';
+      if (msg.includes('EMAIL_EXISTS')) throw new Error('That email address is already registered.');
+      if (msg.includes('WEAK_PASSWORD'))  throw new Error('Password too weak – use at least 6 characters.');
+      throw new Error(msg);
+    }
+    const newUid = data.localId;
+
+    // Write Firestore profile
+    await db.collection('users').doc(newUid).set({
+      displayName: name,
+      email: email,
+      role: role,
+      isActive: true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy: currentUser.uid
+    });
+
+    showMsg('n-msg','ok', '✅ User "' + name + '" created successfully! They can now sign in to the main app.');
+    document.getElementById('n-name').value  = '';
+    document.getElementById('n-email').value = '';
+    document.getElementById('n-pass').value  = '';
+    loadUsers(); // refresh list
+
+  } catch(e) {
+    showMsg('n-msg','err', e.message);
+  }
+  btn.disabled=false; btn.textContent='Create User';
+}
+
+// ── Register existing Auth user ─────────────────────────────────────
+async function registerUser() {
+  const btn   = document.getElementById('r-btn');
+  const uid   = document.getElementById('r-uid').value.trim();
+  const name  = document.getElementById('r-name').value.trim();
+  const email = document.getElementById('r-email').value.trim();
+  const role  = document.getElementById('r-role').value;
+
+  if (!uid)   { showMsg('r-msg','err','Enter the User UID from Firebase Console.'); return; }
+  if (!name)  { showMsg('r-msg','err','Enter the user\'s name.'); return; }
+  if (!email) { showMsg('r-msg','err','Enter the user\'s email.'); return; }
+
+  btn.disabled=true; btn.textContent='Registering…';
+  hideMsg('r-msg');
+
+  try {
+    // Check if already registered
+    const existing = await db.collection('users').doc(uid).get();
+    if (existing.exists) {
+      showMsg('r-msg','err','This UID is already registered in the system as "' + (existing.data().displayName || existing.data().email) + '".');
+      btn.disabled=false; btn.textContent='Register This User';
+      return;
+    }
+
+    await db.collection('users').doc(uid).set({
+      displayName: name,
+      email: email,
+      role: role,
+      isActive: true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy: currentUser.uid
+    });
+
+    showMsg('r-msg','ok', '✅ "' + name + '" has been registered! They can now log in to the main app with their existing credentials.');
+    document.getElementById('r-uid').value   = '';
+    document.getElementById('r-name').value  = '';
+    document.getElementById('r-email').value = '';
+    loadUsers();
+
+  } catch(e) {
+    showMsg('r-msg','err', e.message);
+  }
+  btn.disabled=false; btn.textContent='Register This User';
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+function showMsg(id, type, text) {
+  const el = document.getElementById(id);
+  el.className = 'msg ' + type;
+  el.textContent = text;
+}
+function hideMsg(id) {
+  const el = document.getElementById(id);
+  el.className = 'msg';
+  el.textContent = '';
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function roleBadge(role) {
+  const map = { admin:'badge-admin', management:'badge-management', project_manager:'badge-pm', document_controller:'badge-dc', engineer:'badge-eng', viewer:'badge-viewer' };
+  const labels = { admin:'Admin', management:'Management', project_manager:'Project Manager', document_controller:'Document Controller', engineer:'Engineer', viewer:'Viewer' };
+  const cls = map[role] || 'badge-viewer';
+  return `<span class="badge ${cls}">${esc(labels[role] || role)}</span>`;
+}
+</script>
+</body>
+</html>
