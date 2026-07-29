@@ -31,7 +31,23 @@ const DOC_STATES = ['active','superseded','cancelled','archived'];
 const DISCIPLINES = ['','ELT','INS','MEC','PMG','PRC','QAC','CIV','STR','ARC','HSE'];
 const PURPOSES    = ['','IFR','IFC','IFI','IFA','IFB','IFT','AFD'];
 const INT_EXT     = ['Internal','External'];
+const DOC_TYPES   = ['Internal','External'];
 const PAGE_SIZE   = 50;
+
+// Revision workflow statuses (in order)
+const REV_STATUSES = ['concept','submitted','awaiting_response','response_received','comments_received','new_revision_required','approved','final_approved'];
+const REV_STATUS_LABELS = {
+  concept:               'Concept',
+  submitted:             'Submitted',
+  awaiting_response:     'Awaiting Response',
+  response_received:     'Response Received',
+  comments_received:     'Comments Received',
+  new_revision_required: 'New Revision Required',
+  approved:              'Approved',
+  final_approved:        'Final Approved'
+};
+const APPROVAL_STATUSES = ['pending','approved','not_approved'];
+const APPROVAL_STATUS_LABELS = { pending: 'Pending', approved: 'Approved', not_approved: 'Not Approved' };
 
 // ══════════════════════════════════════════════════════
 //  3.  FIREBASE INIT
@@ -168,14 +184,29 @@ async function getDashboardData() {
     recentEvents = recentSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
     const revs = revsSnap.docs.map(d => d.data());
-    let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0;
+    let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0, approved = 0, notApproved = 0;
+    // Group revisions by document, find latest per doc
+    const latestRevByDoc = {};
     revs.forEach(r => {
-      if (r.finalApproved) { received++; return; }
-      if (r.actualSentDate && !r.receivedDate) { awaitingResponse++; return; }
-      if (!r.targetSentDate || r.actualSentDate) return;
-      const target = new Date(r.targetSentDate);
-      if (target < today) overdue++;
-      else if (target - today <= warningMs) dueSoon++;
+      const docId = r.documentId;
+      if (!latestRevByDoc[docId] || (r.revisionNumber || 0) > (latestRevByDoc[docId].revisionNumber || 0)) {
+        latestRevByDoc[docId] = r;
+      }
+    });
+    Object.values(latestRevByDoc).forEach(r => {
+      const st = r.status;
+      if (st === 'final_approved' || r.finalApproved) { approved++; return; }
+      if (st === 'approved') { approved++; return; }
+      if (st === 'new_revision_required' || r.approvalStatus === 'not_approved') { notApproved++; return; }
+      if (st === 'awaiting_response' || (r.actualSentDate && !r.receivedDate)) { awaitingResponse++; return; }
+      if (st === 'response_received' || st === 'comments_received') { received++; return; }
+      // Check overdue from targetDate or targetSentDate
+      const targetDateStr = r.targetDate || r.targetSentDate;
+      if (targetDateStr && !r.actualSentDate) {
+        const target = new Date(targetDateStr);
+        if (target < today) overdue++;
+        else if (target - today <= warningMs) dueSoon++;
+      }
     });
 
     const byDisc = {}, byProject = {};
@@ -192,7 +223,7 @@ async function getDashboardData() {
       activeDocs: docs.filter(d => d.state === 'active').length,
       totalProjects: activeProjIds.size,
       totalRevisions: revs.length,
-      overdue, dueSoon, awaitingResponse, received,
+      overdue, dueSoon, awaitingResponse, received, approved, notApproved,
       byDisc, byProject, recentEvents,
       isFullView: true
     };
@@ -226,14 +257,27 @@ async function getDashboardData() {
       revs = snapshots.flatMap(s => s.docs.map(d => d.data()));
     }
 
-    let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0;
+    let overdue = 0, dueSoon = 0, awaitingResponse = 0, received = 0, approved = 0, notApproved = 0;
+    const latestRevByDocNA = {};
     revs.forEach(r => {
-      if (r.finalApproved) { received++; return; }
-      if (r.actualSentDate && !r.receivedDate) { awaitingResponse++; return; }
-      if (!r.targetSentDate || r.actualSentDate) return;
-      const target = new Date(r.targetSentDate);
-      if (target < today) overdue++;
-      else if (target - today <= warningMs) dueSoon++;
+      const docId = r.documentId;
+      if (!latestRevByDocNA[docId] || (r.revisionNumber || 0) > (latestRevByDocNA[docId].revisionNumber || 0)) {
+        latestRevByDocNA[docId] = r;
+      }
+    });
+    Object.values(latestRevByDocNA).forEach(r => {
+      const st = r.status;
+      if (st === 'final_approved' || r.finalApproved) { approved++; return; }
+      if (st === 'approved') { approved++; return; }
+      if (st === 'new_revision_required' || r.approvalStatus === 'not_approved') { notApproved++; return; }
+      if (st === 'awaiting_response' || (r.actualSentDate && !r.receivedDate)) { awaitingResponse++; return; }
+      if (st === 'response_received' || st === 'comments_received') { received++; return; }
+      const targetDateStr = r.targetDate || r.targetSentDate;
+      if (targetDateStr && !r.actualSentDate) {
+        const target = new Date(targetDateStr);
+        if (target < today) overdue++;
+        else if (target - today <= warningMs) dueSoon++;
+      }
     });
 
     const byDisc = {}, byProject = {};
@@ -249,7 +293,7 @@ async function getDashboardData() {
       activeDocs: docs.filter(d => d.state === 'active').length,
       totalProjects: activeProjIds.size,
       totalRevisions: revs.length,
-      overdue, dueSoon, awaitingResponse, received,
+      overdue, dueSoon, awaitingResponse, received, approved, notApproved,
       byDisc, byProject, recentEvents: [],
       isFullView: false
     };
@@ -294,6 +338,7 @@ const ROUTES = [
   { re: /^\/admin\/transfer$/,                       page: 'admin-transfer',      admin: true },
   { re: /^\/admin\/import$/,                         page: 'admin-import',        admin: true },
   { re: /^\/export$/,                                page: 'export' },
+  { re: /^\/analytics$/,                             page: 'analytics' },
   { re: /^\/audit$/,                                 page: 'audit',               admin: true },
 ];
 
@@ -343,6 +388,7 @@ function topBar(activePage) {
       ${navLink('/','Dashboard','dashboard')}
       ${navLink('/projects','Projects','projects')}
       ${navLink('/documents','Documents','documents')}
+      ${navLink('/analytics','Analytics','analytics')}
       ${navLink('/export','Export Excel','export')}
       ${isA ? `<span class="admin-sep"></span>` : ''}
       ${isA ? navLink('/admin/import','Import','admin-import') : ''}
@@ -378,14 +424,36 @@ const daysDiff = (dateStr) => {
 };
 
 function revStatus(rev) {
-  if (rev.finalApproved) return { label: 'Final Approved', cls: 'badge-success' };
-  if (rev.receivedDate)  return { label: 'Response Received', cls: 'badge-success' };
-  if (rev.actualSentDate) return { label: 'Awaiting Response', cls: 'badge-info' };
-  if (!rev.targetSentDate) return { label: 'Planned', cls: 'badge-planned' };
+  // New status-based system (primary)
+  if (rev.status) {
+    const st = rev.status;
+    if (st === 'final_approved') return { label: 'Final Approved', cls: 'badge-final' };
+    if (st === 'approved')       return { label: 'Approved', cls: 'badge-success' };
+    if (st === 'not_approved' || st === 'new_revision_required') return { label: REV_STATUS_LABELS[st], cls: 'badge-overdue' };
+    if (st === 'awaiting_response') return { label: 'Awaiting Response', cls: 'badge-warning' };
+    if (st === 'response_received' || st === 'comments_received') return { label: REV_STATUS_LABELS[st], cls: 'badge-info' };
+    // concept / submitted — check overdue
+    if (rev.targetDate) {
+      const diff = daysDiff(rev.targetDate);
+      if (diff !== null && diff < 0) return { label: `Overdue ${-diff}d`, cls: 'badge-overdue' };
+      if (diff !== null && diff <= 7) return { label: `Due in ${diff}d`, cls: 'badge-warning' };
+    }
+    return { label: REV_STATUS_LABELS[st] || st, cls: 'badge-planned' };
+  }
+  // Legacy fallback
+  if (rev.finalApproved) return { label: 'Final Approved', cls: 'badge-final' };
+  if (rev.receivedDate)  return { label: 'Response Received', cls: 'badge-info' };
+  if (rev.actualSentDate) return { label: 'Awaiting Response', cls: 'badge-warning' };
+  if (!rev.targetSentDate) return { label: 'Concept', cls: 'badge-planned' };
   const diff = daysDiff(rev.targetSentDate);
   if (diff < 0)  return { label: `Overdue ${-diff}d`, cls: 'badge-overdue' };
   if (diff <= 7) return { label: `Due in ${diff}d`,  cls: 'badge-warning' };
   return { label: 'On Schedule', cls: 'badge-planned' };
+}
+
+function revStatusBadge(rev) {
+  const st = revStatus(rev);
+  return badge(st.label, st.cls);
 }
 
 function badge(label, cls) { return `<span class="badge ${cls}">${esc(label)}</span>`; }
@@ -541,6 +609,7 @@ async function renderDashboard() {
         <p>${heroSubtitle}</p>
       </div>
       <div class="hero-actions">
+        <a class="btn-hero" href="#/analytics">📊 Analytics</a>
         <a class="btn-hero" href="#/export">📥 Export Excel</a>
         ${isManagement() ? `<a class="btn-hero" href="#/admin/import">📤 Import Excel</a>` : ''}
         ${isManagement() ? `<a class="btn-hero btn-hero-primary" href="#/documents/new">+ Add Document</a>` : ''}
@@ -554,7 +623,7 @@ async function renderDashboard() {
       </a>
       <a class="kpi success" href="#/projects">
         <span>${projLabel}</span><strong>${data.totalProjects}</strong>
-        <small>in progress</small>
+        <small>active projects</small>
       </a>
       <div class="kpi">
         <span>Total Revisions</span><strong>${data.totalRevisions}</strong>
@@ -562,7 +631,7 @@ async function renderDashboard() {
       </div>
       <a class="kpi danger" href="#/documents">
         <span>Overdue</span><strong>${data.overdue}</strong>
-        <small>revisions past target date</small>
+        <small>past target date</small>
       </a>
       <a class="kpi warning" href="#/documents">
         <span>Due This Week</span><strong>${data.dueSoon}</strong>
@@ -571,6 +640,14 @@ async function renderDashboard() {
       <a class="kpi action" href="#/documents">
         <span>Awaiting Response</span><strong>${data.awaitingResponse}</strong>
         <small>sent, not yet received</small>
+      </a>
+      <a class="kpi success" href="#/documents">
+        <span>Approved</span><strong>${data.approved}</strong>
+        <small>approved / final approved</small>
+      </a>
+      <a class="kpi danger" href="#/documents">
+        <span>Not Approved</span><strong>${data.notApproved}</strong>
+        <small>needs revision</small>
       </a>
     </div>
 
@@ -614,13 +691,40 @@ async function renderDashboard() {
 // ══════════════════════════════════════════════════════
 
 async function renderDocuments(qs = {}) {
-  const projects = await getProjects();
+  const [projects, allRevSnap] = await Promise.all([getProjects(), db.collection('revisions').get()]);
 
   // Build filter state from URL query params (via hash fragment)
   const params = qs;
 
-  // fetch matching docs
-  const docs = await getAccessibleDocuments(params);
+  // fetch matching docs (excluding soft-deleted)
+  let docs = await getAccessibleDocuments(params);
+  docs = docs.filter(d => !d.isDeleted);
+
+  // Build latest revision status per document
+  const latestRevStatus = {};
+  allRevSnap.docs.forEach(d => {
+    const r = d.data();
+    const docId = r.documentId;
+    if (!latestRevStatus[docId] || (r.revisionNumber || 0) > (latestRevStatus[docId].revisionNumber || 0)) {
+      latestRevStatus[docId] = r;
+    }
+  });
+
+  // Apply status filter (revStatus)
+  if (params.revStatus) {
+    docs = docs.filter(doc => {
+      const latest = latestRevStatus[doc.id];
+      if (!latest) return params.revStatus === 'all';
+      const st = latest.status || '';
+      switch (params.revStatus) {
+        case 'awaiting_response': return st === 'awaiting_response';
+        case 'approved':          return st === 'approved' || st === 'final_approved' || latest.finalApproved;
+        case 'final_approved':    return st === 'final_approved' || latest.finalApproved;
+        case 'not_approved':      return st === 'new_revision_required' || latest.approvalStatus === 'not_approved';
+        default: return true;
+      }
+    });
+  }
 
   // Project map for display
   const pmap = {};
@@ -646,22 +750,35 @@ async function renderDocuments(qs = {}) {
   const stateOptions = DOC_STATES.map(s =>
     `<option value="${esc(s)}" ${params.state === s ? 'selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('');
 
+  const statusFilterOptions = [
+    { value:'',                label:'All Statuses' },
+    { value:'awaiting_response', label:'Awaiting Response' },
+    { value:'approved',          label:'Approved' },
+    { value:'final_approved',    label:'Final Approved' },
+    { value:'not_approved',      label:'Not Approved' },
+  ].map(o => `<option value="${esc(o.value)}" ${params.revStatus === o.value ? 'selected':''}>${esc(o.label)}</option>`).join('');
+
   const rows = docs.map(doc => {
     const proj = pmap[doc.projectId];
     const projLabel = proj ? `${esc(proj.projectNumber)} — ${esc(proj.name)}` : esc(doc.projectId || '—');
+    const latestRev = latestRevStatus[doc.id];
+    const stBadge = latestRev ? revStatusBadge(latestRev) : badge('No Rev','badge-muted');
+    const ownerDisplay = doc.primaryOwnerName || doc.responsibleName || '—';
     return `<tr onclick="nav('/documents/${esc(doc.id)}')" style="cursor:pointer">
       <td class="nowrap"><a href="#/documents/${esc(doc.id)}" onclick="event.stopPropagation()">${esc(doc.documentNumber)}</a></td>
       <td class="title-cell">
         <strong>${esc(doc.title)}</strong>
         <span class="cell-note">${projLabel}</span>
       </td>
+      <td>${esc(doc.documentType || 'Not Set')}</td>
       <td>${esc(doc.discipline||'—')}</td>
-      <td>${esc(doc.responsibleName||'—')}</td>
-      <td>${docStateBadge(doc.state)}</td>
+      <td>${esc(ownerDisplay)}</td>
+      <td>${stBadge}</td>
       <td class="nowrap">${fmtDate(doc.updatedAt?.toDate?.()?.toISOString())}</td>
       <td class="actions-cell">
         <a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}">View</a>
-        ${isAdmin() ? `<a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}/allocation">Allocation</a>` : ''}
+        ${isManagement() ? `<a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}/edit">Edit</a>` : ''}
+        ${isAdmin() ? `<a class="btn btn-link btn-sm" href="#/documents/${esc(doc.id)}/allocation">Alloc</a>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -670,10 +787,10 @@ async function renderDocuments(qs = {}) {
     <div class="page-header">
       <div>
         <h1>Documents</h1>
-        <p>${docs.length} document${docs.length !== 1 ? 's' : ''} ${isAdmin() ? 'total' : 'assigned to you'}</p>
+        <p>${docs.length} document${docs.length !== 1 ? 's' : ''} ${isManagement() ? 'total' : 'assigned to you'}</p>
       </div>
       <div class="header-actions">
-        ${isAdmin() ? `<a class="btn btn-primary" href="#/documents/new">+ Add Document</a>` : ''}
+        ${isManagement() ? `<a class="btn btn-primary" href="#/documents/new">+ Add Document</a>` : ''}
       </div>
     </div>
 
@@ -691,6 +808,9 @@ async function renderDocuments(qs = {}) {
         <option value="">All states</option>
         ${stateOptions}
       </select>
+      <select id="f-revStatus">
+        ${statusFilterOptions}
+      </select>
       <button type="submit" class="btn btn-primary">Filter</button>
       <button type="button" class="btn btn-ghost" onclick="nav('/documents')">Reset</button>
     </form>
@@ -702,18 +822,19 @@ async function renderDocuments(qs = {}) {
             <tr>
               <th>Doc #</th>
               <th>Title / Project</th>
+              <th>Type</th>
               <th>Discipline</th>
               <th>Owner</th>
-              <th>State</th>
+              <th>Rev Status</th>
               <th>Updated</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            ${rows || `<tr><td colspan="7"><div class="empty-state">
+            ${rows || `<tr><td colspan="8"><div class="empty-state">
               <div class="empty-icon">📄</div>
               <h3>No documents found</h3>
-              <p>Try adjusting your filters${isAdmin() ? ' or add a new document' : ''}.</p>
+              <p>Try adjusting your filters${isManagement() ? ' or add a new document' : ''}.</p>
             </div></td></tr>`}
           </tbody>
         </table>
@@ -731,11 +852,13 @@ function applyDocFilters(e) {
   const projectId = document.getElementById('f-project').value;
   const discipline = document.getElementById('f-disc').value;
   const state = document.getElementById('f-state').value;
+  const revStatus = document.getElementById('f-revStatus').value;
   const params = {};
   if (search) params.search = search;
   if (projectId) params.projectId = projectId;
   if (discipline) params.discipline = discipline;
   if (state) params.state = state;
+  if (revStatus) params.revStatus = revStatus;
   renderDocuments(params);
 }
 
@@ -760,16 +883,21 @@ async function renderDocDetail(docId) {
   const canAdmin = canEditDoc(doc);
 
   const revRows = revs.map(r => {
-    const st = revStatus(r);
+    const stBadge = revStatusBadge(r);
+    const approvBadge = r.approvalStatus === 'approved' ? badge('✓ Approved','badge-success') :
+                        r.approvalStatus === 'not_approved' ? badge('✗ Not Approved','badge-overdue') :
+                        r.finalApproved ? badge('✓ Final Approved','badge-final') : '';
+    const targetDate = r.targetDate || r.targetSentDate;
+    const clientDue  = r.clientDueDate || r.clientResponseDueDate;
     return `<tr>
       <td class="nowrap"><strong>Rev ${esc(r.revisionNumber)}</strong></td>
       <td class="nowrap">${fmtDate(r.startDate)}</td>
-      <td class="nowrap">${fmtDate(r.targetSentDate)}</td>
+      <td class="nowrap">${fmtDate(targetDate)}</td>
       <td class="nowrap">${fmtDate(r.actualSentDate)||'—'}</td>
       <td class="nowrap">${fmtDate(r.receivedDate)||'—'}</td>
-      <td class="nowrap">${fmtDate(r.clientResponseDueDate)||'—'}</td>
-      <td>${badge(st.label, st.cls)}</td>
-      <td>${r.finalApproved ? badge('✓ Approved','badge-success') : ''}</td>
+      <td class="nowrap">${fmtDate(clientDue)||'—'}</td>
+      <td>${stBadge}</td>
+      <td>${approvBadge}</td>
       <td class="actions-cell">
         ${canEdit ? `<a class="btn btn-link btn-sm" href="#/documents/${esc(docId)}/revisions/${esc(r.id)}/edit">Edit</a>` : ''}
         ${canAdmin ? `<button class="btn btn-link btn-sm" style="color:var(--red)" onclick="deleteRevision('${esc(r.id)}','${esc(docId)}')">Delete</button>` : ''}
@@ -787,11 +915,12 @@ async function renderDocDetail(docId) {
       <h2>${esc(doc.title)}</h2>
       <div class="detail-grid">
         <div class="detail-item"><label>Project</label><span>${proj ? `${esc(proj.projectNumber)} — ${esc(proj.name)}` : '—'}</span></div>
+        <div class="detail-item"><label>Document Type</label><span>${esc(doc.documentType||'Not Set')}</span></div>
         <div class="detail-item"><label>Discipline</label><span>${esc(doc.discipline||'—')}</span></div>
         <div class="detail-item"><label>Document Code</label><span>${esc(doc.documentCode||'—')}</span></div>
         <div class="detail-item"><label>Issue Purpose</label><span>${esc(doc.issuePurpose||'—')}</span></div>
-        <div class="detail-item"><label>Internal / External</label><span>${esc(doc.internalExternal||'—')}</span></div>
-        <div class="detail-item"><label>Primary Owner</label><span>${esc(owner?.displayName||doc.responsibleName||'—')}</span></div>
+        <div class="detail-item"><label>Primary Owner</label><span>${esc(doc.primaryOwnerName||owner?.displayName||doc.responsibleName||'—')}</span></div>
+        <div class="detail-item"><label>Project Manager</label><span>${esc(doc.projectManagerName||'—')}</span></div>
         <div class="detail-item"><label>Additional Viewers</label><span>${esc(viewers||'—')}</span></div>
         <div class="detail-item"><label>State</label><span>${docStateBadge(doc.state)}</span></div>
         <div class="detail-item"><label>Final Approved</label><span>${doc.finalApproved ? badge('Yes','badge-success') : badge('No','badge-muted')}</span></div>
@@ -801,7 +930,8 @@ async function renderDocDetail(docId) {
         ${canAdmin ? `<a class="btn btn-secondary" href="#/documents/${esc(docId)}/edit">Edit Master Data</a>` : ''}
         ${canAdmin ? `<a class="btn btn-secondary" href="#/documents/${esc(docId)}/allocation">Edit Allocation</a>` : ''}
         ${canEdit  ? `<button class="btn btn-primary" onclick="addRevision('${esc(docId)}')">+ Add Revision</button>` : ''}
-        ${canAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteDocument('${esc(docId)}')">Delete Document</button>` : ''}
+        ${canAdmin ? `<button class="btn btn-warning btn-sm" onclick="archiveDocument('${esc(docId)}')">Archive Document</button>` : ''}
+        ${canAdmin ? `<button class="btn btn-danger btn-sm" onclick="deleteDocument('${esc(docId)}')">Hard Delete</button>` : ''}
       </div>
     </div>
 
@@ -831,8 +961,31 @@ async function addRevision(docId) {
   const doc = await getDocument(docId);
   if (!doc || !canEditRevision(doc)) { toast('You do not have permission to add revisions.','error'); return; }
   const revs = await getRevisions(docId);
-  const nextRev = revs.length > 0 ? revs[revs.length-1].revisionNumber + 1 : 1;
-  const newRev = { documentId: docId, revisionNumber: nextRev, startDate: today(), targetSentDate: '', actualSentDate: '', receivedDate: '', clientResponseDueDate: '', finalApproved: false, remarks: '', version: 1, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: S.user.uid };
+  // Auto-increment: find max existing revision number and add 1
+  const maxRev = revs.length > 0 ? Math.max(...revs.map(r => r.revisionNumber || 0)) : -1;
+  const nextRev = maxRev + 1;
+  const newRev = {
+    documentId: docId,
+    revisionNumber: nextRev,
+    status: 'concept',
+    approvalStatus: 'pending',
+    targetDate: '',
+    sentDate: '',
+    actualSentDate: '',
+    receivedDate: '',
+    clientDueDate: '',
+    clientComments: '',
+    internalRemarks: '',
+    // legacy fields kept for backward compat
+    startDate: today(),
+    targetSentDate: '',
+    clientResponseDueDate: '',
+    finalApproved: false,
+    remarks: '',
+    version: 1,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: S.user.uid
+  };
   const ref = await db.collection('revisions').add(newRev);
   await writeAudit('create','revision',ref.id,`Rev ${nextRev} of ${doc.documentNumber}`);
   toast(`Revision ${nextRev} added — editing now…`,'success');
@@ -848,16 +1001,32 @@ async function deleteRevision(revId, docId) {
   renderDocDetail(docId);
 }
 
-async function deleteDocument(docId) {
+async function archiveDocument(docId) {
   if (!isManagement()) { toast('Admin/Management only.','error'); return; }
-  if (!confirm('Delete this document and ALL its revisions? This cannot be undone.')) return;
+  const doc = await getDocument(docId);
+  if (!doc) return;
+  if (!confirm(`Archive "${doc.documentNumber} — ${doc.title}"?\n\nThe document will be hidden from lists but can be recovered by an admin.`)) return;
+  await db.collection('documents').doc(docId).update({
+    isDeleted: true,
+    state: 'archived',
+    archivedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    archivedBy: S.user.uid
+  });
+  await writeAudit('archive','document',docId,doc.documentNumber);
+  toast('Document archived.','success');
+  nav('/documents');
+}
+
+async function deleteDocument(docId) {
+  if (!isAdmin()) { toast('Admin only for hard delete.','error'); return; }
+  if (!confirm('PERMANENTLY delete this document and ALL its revisions? This CANNOT be undone.')) return;
   const revs = await getRevisions(docId);
   const batch = db.batch();
   revs.forEach(r => batch.delete(db.collection('revisions').doc(r.id)));
   batch.delete(db.collection('documents').doc(docId));
   await batch.commit();
   await writeAudit('delete','document',docId,'document');
-  toast('Document and revisions deleted.','success');
+  toast('Document permanently deleted.','success');
   nav('/documents');
 }
 
@@ -870,6 +1039,11 @@ async function renderRevEdit(docId, revId) {
   if (!doc || !rev) { render(pageShell('documents',`<div class="empty-state"><h3>Not found</h3><a class="btn btn-secondary" href="#/documents">← Back</a></div>`)); return; }
   if (!canEditRevision(doc)) { render(pageShell('documents',`<div class="empty-state"><h3>Access denied</h3></div>`)); return; }
 
+  const statusOptions = REV_STATUSES.map(s =>
+    `<option value="${esc(s)}" ${(rev.status||'concept') === s ? 'selected':''}>${esc(REV_STATUS_LABELS[s])}</option>`).join('');
+  const approvalOptions = APPROVAL_STATUSES.map(s =>
+    `<option value="${esc(s)}" ${(rev.approvalStatus||'pending') === s ? 'selected':''}>${esc(APPROVAL_STATUS_LABELS[s])}</option>`).join('');
+
   render(pageShell('documents', `
     <div style="margin-bottom:14px">
       <a href="#/documents/${esc(docId)}" style="color:var(--muted);font-size:13px">← ${esc(doc.documentNumber)} — ${esc(doc.title)}</a>
@@ -880,6 +1054,20 @@ async function renderRevEdit(docId, revId) {
 
       <form id="rev-form" onsubmit="saveRevision(event,'${esc(docId)}','${esc(revId)}')">
         <div class="form-section">
+          <h3>Status</h3>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Revision Status</label>
+              <select id="f-status">${statusOptions}</select>
+            </div>
+            <div class="form-group">
+              <label>Approval Status</label>
+              <select id="f-approvalStatus">${approvalOptions}</select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3>Revision Dates</h3>
           <div class="form-grid">
             <div class="form-group">
@@ -887,8 +1075,12 @@ async function renderRevEdit(docId, revId) {
               <input type="date" id="f-startDate" value="${esc(rev.startDate||'')}">
             </div>
             <div class="form-group">
-              <label>Target Sent Date</label>
-              <input type="date" id="f-targetSentDate" value="${esc(rev.targetSentDate||'')}">
+              <label>Target Date</label>
+              <input type="date" id="f-targetDate" value="${esc(rev.targetDate||rev.targetSentDate||'')}">
+            </div>
+            <div class="form-group">
+              <label>Sent Date (planned)</label>
+              <input type="date" id="f-sentDate" value="${esc(rev.sentDate||rev.targetSentDate||'')}">
             </div>
             <div class="form-group">
               <label>Actual Sent Date</label>
@@ -899,23 +1091,23 @@ async function renderRevEdit(docId, revId) {
               <input type="date" id="f-receivedDate" value="${esc(rev.receivedDate||'')}">
             </div>
             <div class="form-group">
-              <label>Client Response Due Date</label>
-              <input type="date" id="f-clientResponseDueDate" value="${esc(rev.clientResponseDueDate||'')}">
+              <label>Client Due Date</label>
+              <input type="date" id="f-clientDueDate" value="${esc(rev.clientDueDate||rev.clientResponseDueDate||'')}">
             </div>
           </div>
         </div>
 
         <div class="form-section">
-          <h3>Status & Notes</h3>
-          <div class="form-group" style="margin-bottom:14px">
-            <div class="check-group">
-              <input type="checkbox" id="f-finalApproved" ${rev.finalApproved ? 'checked' : ''}>
-              <label for="f-finalApproved">Final Approved</label>
+          <h3>Comments & Remarks</h3>
+          <div class="form-grid">
+            <div class="form-group full">
+              <label>Client Comments</label>
+              <textarea id="f-clientComments" rows="3">${esc(rev.clientComments||'')}</textarea>
             </div>
-          </div>
-          <div class="form-group">
-            <label>Remarks</label>
-            <textarea id="f-remarks" rows="4">${esc(rev.remarks||'')}</textarea>
+            <div class="form-group full">
+              <label>Internal Remarks</label>
+              <textarea id="f-internalRemarks" rows="3">${esc(rev.internalRemarks||rev.remarks||'')}</textarea>
+            </div>
           </div>
         </div>
 
@@ -935,20 +1127,37 @@ async function saveRevision(e, docId, revId) {
   const err = document.getElementById('rev-err');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
+    const newStatus = document.getElementById('f-status')?.value || 'concept';
+    const isFinalApproved = newStatus === 'final_approved';
+    const isApproved = newStatus === 'approved' || isFinalApproved;
+    const targetDate = document.getElementById('f-targetDate')?.value || null;
+    const actualSentDate = document.getElementById('f-actualSentDate')?.value || null;
     const updates = {
-      startDate:             document.getElementById('f-startDate').value || null,
-      targetSentDate:        document.getElementById('f-targetSentDate').value || null,
-      actualSentDate:        document.getElementById('f-actualSentDate').value || null,
-      receivedDate:          document.getElementById('f-receivedDate').value || null,
-      clientResponseDueDate: document.getElementById('f-clientResponseDueDate').value || null,
-      finalApproved:         document.getElementById('f-finalApproved').checked,
-      remarks:               document.getElementById('f-remarks').value.trim(),
-      updatedAt:             firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy:             S.user.uid
+      status:               newStatus,
+      approvalStatus:       document.getElementById('f-approvalStatus')?.value || 'pending',
+      startDate:            document.getElementById('f-startDate')?.value || null,
+      targetDate:           targetDate,
+      sentDate:             document.getElementById('f-sentDate')?.value || null,
+      actualSentDate:       actualSentDate,
+      receivedDate:         document.getElementById('f-receivedDate')?.value || null,
+      clientDueDate:        document.getElementById('f-clientDueDate')?.value || null,
+      clientComments:       document.getElementById('f-clientComments')?.value.trim() || '',
+      internalRemarks:      document.getElementById('f-internalRemarks')?.value.trim() || '',
+      // keep legacy fields in sync
+      targetSentDate:       targetDate,
+      clientResponseDueDate: document.getElementById('f-clientDueDate')?.value || null,
+      finalApproved:        isFinalApproved,
+      remarks:              document.getElementById('f-internalRemarks')?.value.trim() || '',
+      updatedAt:            firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy:            S.user.uid
     };
     await db.collection('revisions').doc(revId).update(updates);
+    // If final approved, also mark the parent document as final approved
+    if (isFinalApproved) {
+      await db.collection('documents').doc(docId).update({ finalApproved: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
     const doc = await getDocument(docId);
-    await writeAudit('update','revision',revId,`Rev of ${doc?.documentNumber}`,updates);
+    await writeAudit('update','revision',revId,`Rev of ${doc?.documentNumber}`,{ status: newStatus });
     toast('Revision saved.','success');
     nav(`/documents/${docId}`);
   } catch (ex) {
@@ -962,17 +1171,18 @@ async function saveRevision(e, docId, revId) {
 // ══════════════════════════════════════════════════════
 
 async function renderDocNew() {
-  const projects = await getProjects();
-  renderDocForm(null, projects);
+  const [projects, users] = await Promise.all([getProjects(), getUsers()]);
+  renderDocForm(null, projects, users);
 }
 
 async function renderDocEdit(docId) {
-  const [doc, projects] = await Promise.all([getDocument(docId), getProjects()]);
-  renderDocForm(doc, projects);
+  const [doc, projects, users] = await Promise.all([getDocument(docId), getProjects(), getUsers()]);
+  renderDocForm(doc, projects, users);
 }
 
-function renderDocForm(doc, projects) {
+function renderDocForm(doc, projects, users = []) {
   const isNew = !doc;
+  const activeUsers = users.filter(u => u.isActive !== false);
   const projOptions = projects.map(p =>
     `<option value="${esc(p.id)}" ${doc?.projectId === p.id ? 'selected':''}>${esc(p.projectNumber)} — ${esc(p.name)}</option>`).join('');
   const discOptions = DISCIPLINES.map(d =>
@@ -981,6 +1191,12 @@ function renderDocForm(doc, projects) {
     `<option value="${esc(p)}" ${doc?.issuePurpose === p ? 'selected':''}>${p || '— Select —'}</option>`).join('');
   const stateOptions = DOC_STATES.map(s =>
     `<option value="${esc(s)}" ${(doc?.state||'active') === s ? 'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('');
+  const docTypeOptions = DOC_TYPES.map(t =>
+    `<option value="${esc(t)}" ${(doc?.documentType||'External') === t ? 'selected':''}>${esc(t)}</option>`).join('');
+  const ownerOptions = activeUsers.map(u =>
+    `<option value="${esc(u.id)}" data-name="${esc(u.displayName)}" ${doc?.primaryOwnerId === u.id ? 'selected':''}>${esc(u.displayName)} (${esc(ROLE_LABELS[u.role]||u.role)})</option>`).join('');
+  const pmOptions = activeUsers.map(u =>
+    `<option value="${esc(u.id)}" data-name="${esc(u.displayName)}" ${doc?.projectManagerId === u.id ? 'selected':''}>${esc(u.displayName)} (${esc(ROLE_LABELS[u.role]||u.role)})</option>`).join('');
 
   render(pageShell('documents', `
     <div style="margin-bottom:14px">
@@ -1008,6 +1224,13 @@ function renderDocForm(doc, projects) {
               <input type="text" id="f-title" value="${esc(doc?.title||'')}" required placeholder="Full document title">
             </div>
             <div class="form-group">
+              <label>Document Type <span style="color:var(--red)">*</span></label>
+              <select id="f-documentType" required>
+                <option value="">— Select Type —</option>
+                ${docTypeOptions}
+              </select>
+            </div>
+            <div class="form-group">
               <label>Discipline</label>
               <select id="f-discipline">${discOptions}</select>
             </div>
@@ -1020,12 +1243,6 @@ function renderDocForm(doc, projects) {
               <select id="f-issuePurpose">${purposeOptions}</select>
             </div>
             <div class="form-group">
-              <label>Internal / External</label>
-              <select id="f-internalExternal">
-                ${INT_EXT.map(v=>`<option value="${esc(v)}" ${doc?.internalExternal===v?'selected':''}>${esc(v)}</option>`).join('')}
-              </select>
-            </div>
-            <div class="form-group">
               <label>State</label>
               <select id="f-state">${stateOptions}</select>
             </div>
@@ -1033,13 +1250,33 @@ function renderDocForm(doc, projects) {
         </div>
 
         <div class="form-section">
-          <h3>Additional Info</h3>
+          <h3>Ownership</h3>
           <div class="form-grid">
             <div class="form-group">
-              <label>Owner Name (text)</label>
-              <input type="text" id="f-responsibleName" value="${esc(doc?.responsibleName||'')}" placeholder="Enter name as text">
-              <span class="hint">Free-text name visible in document lists. Use Allocation page to set actual user account as owner.</span>
+              <label>Primary Owner</label>
+              <select id="f-primaryOwnerId">
+                <option value="">— Not assigned —</option>
+                ${ownerOptions}
+              </select>
             </div>
+            <div class="form-group">
+              <label>Project Manager</label>
+              <select id="f-projectManagerId">
+                <option value="">— Not assigned —</option>
+                ${pmOptions}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Owner Name (text label)</label>
+              <input type="text" id="f-responsibleName" value="${esc(doc?.responsibleName||'')}" placeholder="Display name for lists">
+              <span class="hint">Optional free-text name shown in document lists.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Additional Info</h3>
+          <div class="form-grid">
             <div class="form-group">
               <div class="check-group" style="margin-top:24px">
                 <input type="checkbox" id="f-finalApprovedDoc" ${doc?.finalApproved ? 'checked':''}>
@@ -1069,32 +1306,65 @@ async function saveDocument(e, docId) {
   const err = document.getElementById('doc-err');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
+    const primaryOwnerSel = document.getElementById('f-primaryOwnerId');
+    const pmSel           = document.getElementById('f-projectManagerId');
+    const primaryOwnerId     = primaryOwnerSel?.value || null;
+    const primaryOwnerName   = primaryOwnerSel?.selectedOptions[0]?.dataset?.name || '';
+    const projectManagerId   = pmSel?.value || null;
+    const projectManagerName = pmSel?.selectedOptions[0]?.dataset?.name || '';
+
     const data = {
-      documentNumber:   document.getElementById('f-docNumber').value.trim(),
-      projectId:        document.getElementById('f-projectId').value,
-      title:            document.getElementById('f-title').value.trim(),
-      discipline:       document.getElementById('f-discipline').value,
-      documentCode:     document.getElementById('f-documentCode').value.trim(),
-      issuePurpose:     document.getElementById('f-issuePurpose').value,
-      internalExternal: document.getElementById('f-internalExternal').value,
-      state:            document.getElementById('f-state').value,
-      responsibleName:  document.getElementById('f-responsibleName').value.trim(),
-      finalApproved:    document.getElementById('f-finalApprovedDoc').checked,
-      generalRemarks:   document.getElementById('f-generalRemarks').value.trim(),
-      updatedAt:        firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy:        S.user.uid,
+      documentNumber:     document.getElementById('f-docNumber').value.trim(),
+      projectId:          document.getElementById('f-projectId').value,
+      title:              document.getElementById('f-title').value.trim(),
+      documentType:       document.getElementById('f-documentType')?.value || 'External',
+      discipline:         document.getElementById('f-discipline').value,
+      documentCode:       document.getElementById('f-documentCode').value.trim(),
+      issuePurpose:       document.getElementById('f-issuePurpose').value,
+      state:              document.getElementById('f-state').value,
+      primaryOwnerId:     primaryOwnerId,
+      primaryOwnerName:   primaryOwnerName,
+      projectManagerId:   projectManagerId,
+      projectManagerName: projectManagerName,
+      responsibleName:    document.getElementById('f-responsibleName')?.value.trim() || primaryOwnerName,
+      finalApproved:      document.getElementById('f-finalApprovedDoc').checked,
+      generalRemarks:     document.getElementById('f-generalRemarks').value.trim(),
+      updatedAt:          firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy:          S.user.uid,
     };
     let id = docId;
     if (!docId) {
       data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
       data.createdBy = S.user.uid;
       data.version = 1;
-      data.primaryOwnerId = null;
       data.additionalViewerIds = [];
+      data.isDeleted = false;
       const ref = await db.collection('documents').add(data);
       id = ref.id;
       await writeAudit('create','document',id,data.documentNumber);
-      toast('Document created.','success');
+      // Auto-create Rev 0
+      await db.collection('revisions').add({
+        documentId: id,
+        revisionNumber: 0,
+        status: 'concept',
+        approvalStatus: 'pending',
+        targetDate: '',
+        sentDate: '',
+        actualSentDate: '',
+        receivedDate: '',
+        clientDueDate: '',
+        clientComments: '',
+        internalRemarks: '',
+        startDate: today(),
+        targetSentDate: '',
+        clientResponseDueDate: '',
+        finalApproved: false,
+        remarks: '',
+        version: 1,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        createdBy: S.user.uid
+      });
+      toast('Document created with Rev 0.','success');
     } else {
       await db.collection('documents').doc(docId).update(data);
       await writeAudit('update','document',docId,data.documentNumber,data);
@@ -1281,12 +1551,13 @@ async function renderProjectDetail(projectId) {
   const [proj, docs] = await Promise.all([getProject(projectId), getAccessibleDocuments({projectId})]);
   if (!proj) { render(pageShell('projects',`<div class="empty-state"><h3>Project not found</h3><a class="btn btn-secondary" href="#/projects">← Back</a></div>`)); return; }
 
-  const rows = docs.map(doc => `
+  const rows = docs.filter(d => !d.isDeleted).map(doc => `
     <tr onclick="nav('/documents/${esc(doc.id)}')" style="cursor:pointer">
       <td><a href="#/documents/${esc(doc.id)}" onclick="event.stopPropagation()">${esc(doc.documentNumber)}</a></td>
       <td class="title-cell">${esc(doc.title)}</td>
+      <td>${esc(doc.documentType||'Not Set')}</td>
       <td>${esc(doc.discipline||'—')}</td>
-      <td>${esc(doc.responsibleName||'—')}</td>
+      <td>${esc(doc.primaryOwnerName||doc.responsibleName||'—')}</td>
       <td>${docStateBadge(doc.state)}</td>
     </tr>`).join('');
 
@@ -1309,8 +1580,8 @@ async function renderProjectDetail(projectId) {
       <div class="panel-heading"><h2>Documents (${docs.length})</h2></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Doc #</th><th>Title</th><th>Discipline</th><th>Owner</th><th>State</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="5"><div class="empty-state" style="padding:32px"><div class="empty-icon">📄</div><h3>No documents</h3></div></td></tr>`}</tbody>
+          <thead><tr><th>Doc #</th><th>Title</th><th>Type</th><th>Discipline</th><th>Owner</th><th>State</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6"><div class="empty-state" style="padding:32px"><div class="empty-icon">📄</div><h3>No documents</h3></div></td></tr>`}</tbody>
         </table>
       </div>
     </div>
@@ -1366,6 +1637,22 @@ async function saveProject(e, projId) {
     active: document.getElementById('mp-active').checked,
   };
   try {
+    // Project closure check: warn if marking inactive and not all docs approved
+    if (projId && !data.active) {
+      const docsSnap = await db.collection('documents').where('projectId','==',projId).get();
+      const projDocs = docsSnap.docs.map(d => d.data()).filter(d => !d.isDeleted && d.state === 'active');
+      const unapproved = projDocs.filter(d => !d.finalApproved);
+      if (unapproved.length > 0) {
+        const proceed = confirm(
+          `⚠️ Warning: ${unapproved.length} document(s) in this project are not yet Final Approved.\n\n` +
+          `Closing a project with unapproved documents is not recommended.\n\nProceed anyway?`
+        );
+        if (!proceed) {
+          document.getElementById('mp-active').checked = true;
+          return;
+        }
+      }
+    }
     if (projId) {
       await db.collection('projects').doc(projId).update({ ...data, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
       await writeAudit('update','project',projId,data.projectNumber);
@@ -1977,18 +2264,26 @@ function clearImport() {
 
 function downloadImportTemplate() {
   const headers = [
-    'Document Number', 'Title', 'Project Number', 'Discipline', 'Target Sent Date',
-    'Actual Sent Date', 'Received Date', 'Client Response Due Date',
-    'Final Approved', 'Remarks', 'Owner Name'
+    'Document Number', 'Title', 'Project Number', 'Document Type', 'Discipline',
+    'Document Code', 'Issue Purpose', 'Owner Name', 'Project Manager Name',
+    'Target Date', 'Actual Sent Date', 'Received Date', 'Client Due Date',
+    'Rev Status', 'Client Comments', 'Internal Remarks'
   ];
   const sampleRow = [
-    'ELT-001-001', 'Single Line Diagram', 'PRJ-001', 'ELT', '2024-01-31',
-    '2024-02-05', '2024-02-10', '2024-02-20',
-    'Yes', 'Issued for Review', 'John Smith'
+    'ELT-001-001', 'Single Line Diagram', 'PRJ-001', 'External', 'ELT',
+    'SP', 'IFR', 'John Smith', 'Jane Doe',
+    '2024-01-31', '2024-02-05', '2024-02-10', '2024-02-20',
+    'awaiting_response', 'Please review section 3', 'Issued for Review'
   ];
-  const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
-  // Set column widths
-  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 2, 18) }));
+  const notes = [
+    ['Document Type: Internal or External'],
+    ['Rev Status: concept, submitted, awaiting_response, response_received, comments_received, new_revision_required, approved, final_approved'],
+    ['Disciplines: ELT, INS, MEC, PMG, PRC, QAC, CIV, STR, ARC, HSE'],
+    ['Issue Purpose: IFR, IFC, IFI, IFA, IFB, IFT, AFD'],
+    ['Dates format: YYYY-MM-DD'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow, [], ['--- NOTES ---'], ...notes]);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 4, 20) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Import Template');
   XLSX.writeFile(wb, 'DCI_Import_Template.xlsx');
@@ -2036,17 +2331,30 @@ async function doImport() {
       const proj = pByNum[projNum] || (defaultProjId ? { id: defaultProjId } : null);
       const projectId = proj?.id || null;
 
-      const revisionNumber = parseInt(normalize(row,'revision')||normalize(row,'rev no')||'1') || 1;
+      const revisionNumber = parseInt(normalize(row,'revision')||normalize(row,'rev no')||'0') || 0;
+      const rawRevStatus = String(normalize(row,'rev status')||normalize(row,'status')||'concept').trim().toLowerCase().replace(/ /g,'_');
+      const revStatus2 = REV_STATUSES.includes(rawRevStatus) ? rawRevStatus : 'concept';
+      const targetDate = parseDate(normalize(row,'target date')||normalize(row,'target sent date')||normalize(row,'targetdate'));
+      const actualSentDate = parseDate(normalize(row,'actual sent date')||normalize(row,'actualsentdate'));
+      const clientDue = parseDate(normalize(row,'client due date')||normalize(row,'client response due date')||normalize(row,'clientdue'));
       const revData = {
         documentId: null, // will set after doc id known
         revisionNumber,
-        startDate:             parseDate(normalize(row,'start date')||normalize(row,'startdate')),
-        targetSentDate:        parseDate(normalize(row,'target sent date')||normalize(row,'target date')||normalize(row,'targetsentdate')),
-        actualSentDate:        parseDate(normalize(row,'actual sent date')||normalize(row,'actual date')||normalize(row,'actualsentdate')),
-        receivedDate:          parseDate(normalize(row,'received date')||normalize(row,'receiveddate')),
-        clientResponseDueDate: parseDate(normalize(row,'client response due date')||normalize(row,'client due')||normalize(row,'clientresponse')),
-        finalApproved:         ['yes','true','1','y'].includes(String(normalize(row,'final approved')||'').toLowerCase()),
-        remarks:               String(normalize(row,'remarks')||'').trim(),
+        status:               revStatus2,
+        approvalStatus:       revStatus2 === 'approved' || revStatus2 === 'final_approved' ? 'approved' : 'pending',
+        targetDate:           targetDate,
+        sentDate:             targetDate,
+        actualSentDate:       actualSentDate,
+        receivedDate:         parseDate(normalize(row,'received date')||normalize(row,'receiveddate')),
+        clientDueDate:        clientDue,
+        clientComments:       String(normalize(row,'client comments')||'').trim(),
+        internalRemarks:      String(normalize(row,'internal remarks')||normalize(row,'remarks')||'').trim(),
+        // legacy fields
+        startDate:            parseDate(normalize(row,'start date')||normalize(row,'startdate')),
+        targetSentDate:       targetDate,
+        clientResponseDueDate: clientDue,
+        finalApproved:        revStatus2 === 'final_approved',
+        remarks:              String(normalize(row,'internal remarks')||normalize(row,'remarks')||'').trim(),
         version: 1,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         createdBy: S.user.uid
@@ -2057,14 +2365,20 @@ async function doImport() {
         docId = docByNum[docNum].id;
         updated++;
       } else {
+        const rawDocType = String(normalize(row,'document type')||normalize(row,'type')||'External').trim();
+        const docType = DOC_TYPES.includes(rawDocType) ? rawDocType : 'External';
+        const ownerNameRaw = String(normalize(row,'owner name')||normalize(row,'responsible')||'').trim();
+        const pmNameRaw    = String(normalize(row,'project manager name')||normalize(row,'project manager')||'').trim();
         const docData = {
           documentNumber: docNum, title, projectId,
+          documentType:  docType,
           discipline:    String(normalize(row,'discipline')||'').trim().toUpperCase(),
           documentCode:  String(normalize(row,'document code')||normalize(row,'code')||'').trim(),
           issuePurpose:  String(normalize(row,'issue purpose')||normalize(row,'purpose')||'').trim(),
-          internalExternal: String(normalize(row,'internal external')||normalize(row,'type')||'External').trim(),
-          responsibleName: String(normalize(row,'owner name')||normalize(row,'responsible')||'').trim(),
-          state: 'active', finalApproved: false, version: 1,
+          primaryOwnerName:   ownerNameRaw,
+          projectManagerName: pmNameRaw,
+          responsibleName:    ownerNameRaw,
+          state: 'active', finalApproved: false, version: 1, isDeleted: false,
           primaryOwnerId: null, additionalViewerIds: [],
           createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: S.user.uid
         };
@@ -2150,28 +2464,37 @@ async function doExport() {
     const rows = [];
     for (const doc of docs) {
       const proj = pmap[doc.projectId];
-      const revs = revsByDoc[doc.id] || [{}];
-      for (const rev of revs) {
+      const docRevs = revsByDoc[doc.id] || [{}];
+      for (const rev of docRevs) {
+        const targetDate = rev.targetDate || rev.targetSentDate || '';
+        const clientDue  = rev.clientDueDate || rev.clientResponseDueDate || '';
+        const revStatusLabel = rev.status ? (REV_STATUS_LABELS[rev.status] || rev.status) :
+          (rev.finalApproved ? 'Final Approved' : rev.actualSentDate ? 'Awaiting Response' : 'Concept');
         rows.push({
-          'Project Number':          proj?.projectNumber || '',
-          'Project Name':            proj?.name || '',
-          'Client':                  proj?.clientName || '',
-          'Document Number':         doc.documentNumber || '',
-          'Title':                   doc.title || '',
-          'Discipline':              doc.discipline || '',
-          'Document Code':           doc.documentCode || '',
-          'Issue Purpose':           doc.issuePurpose || '',
-          'Internal/External':       doc.internalExternal || '',
-          'Owner':                   doc.responsibleName || '',
-          'State':                   doc.state || '',
-          'Revision':                rev.revisionNumber || '',
-          'Start Date':              rev.startDate || '',
-          'Target Sent Date':        rev.targetSentDate || '',
-          'Actual Sent Date':        rev.actualSentDate || '',
-          'Received Date':           rev.receivedDate || '',
-          'Client Response Due':     rev.clientResponseDueDate || '',
-          'Final Approved':          rev.finalApproved ? 'Yes' : 'No',
-          'Remarks':                 rev.remarks || '',
+          'Project Number':      proj?.projectNumber || '',
+          'Project Name':        proj?.name || '',
+          'Client':              proj?.clientName || '',
+          'Document Number':     doc.documentNumber || '',
+          'Title':               doc.title || '',
+          'Document Type':       doc.documentType || 'Not Set',
+          'Discipline':          doc.discipline || '',
+          'Document Code':       doc.documentCode || '',
+          'Issue Purpose':       doc.issuePurpose || '',
+          'Primary Owner':       doc.primaryOwnerName || doc.responsibleName || '',
+          'Project Manager':     doc.projectManagerName || '',
+          'State':               doc.state || '',
+          'Revision':            rev.revisionNumber ?? '',
+          'Rev Status':          revStatusLabel,
+          'Approval Status':     rev.approvalStatus ? (APPROVAL_STATUS_LABELS[rev.approvalStatus] || rev.approvalStatus) : '',
+          'Start Date':          rev.startDate || '',
+          'Target Date':         targetDate,
+          'Sent Date':           rev.sentDate || '',
+          'Actual Sent Date':    rev.actualSentDate || '',
+          'Received Date':       rev.receivedDate || '',
+          'Client Due Date':     clientDue,
+          'Client Comments':     rev.clientComments || '',
+          'Internal Remarks':    rev.internalRemarks || rev.remarks || '',
+          'Final Approved':      (rev.finalApproved || rev.status === 'final_approved') ? 'Yes' : 'No',
         });
       }
     }
@@ -2180,7 +2503,7 @@ async function doExport() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'DCI Schedule');
     // Column widths
-    ws['!cols'] = [12,24,18,20,40,8,10,10,12,20,10,6,12,14,14,14,16,12,40].map(w=>({wch:w}));
+    ws['!cols'] = [12,24,18,20,40,12,8,10,10,20,20,10,6,18,14,12,14,12,14,14,14,24,24,12].map(w=>({wch:w}));
     const fname = `DCI_Schedule_${today()}.xlsx`;
     XLSX.writeFile(wb, fname);
     toast('Export downloaded.','success');
@@ -2421,6 +2744,166 @@ window.saveRolePermissions = async function() {
 };
 
 // ══════════════════════════════════════════════════════
+//  24c.  PAGE: ANALYTICS
+// ══════════════════════════════════════════════════════
+
+async function renderAnalytics() {
+  const [projects, docsSnap, revsSnap] = await Promise.all([
+    getProjects(),
+    db.collection('documents').get(),
+    db.collection('revisions').get()
+  ]);
+
+  let docs = docsSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.isDeleted);
+  const revs = revsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const pmap = {}; projects.forEach(p => { pmap[p.id] = p; });
+
+  // Latest revision per document
+  const latestRev = {};
+  revs.forEach(r => {
+    const docId = r.documentId;
+    if (!latestRev[docId] || (r.revisionNumber||0) > (latestRev[docId].revisionNumber||0)) latestRev[docId] = r;
+  });
+
+  // 1. By Status
+  const statusCount = {};
+  REV_STATUSES.forEach(s => statusCount[s] = 0);
+  docs.forEach(d => {
+    const r = latestRev[d.id];
+    const st = r?.status || 'concept';
+    statusCount[st] = (statusCount[st]||0) + 1;
+  });
+
+  // 2. By Document Type
+  const typeCount = { Internal: 0, External: 0, 'Not Set': 0 };
+  docs.forEach(d => { const t = d.documentType || 'Not Set'; typeCount[t] = (typeCount[t]||0)+1; });
+
+  // 3. By Discipline
+  const discCount = {};
+  docs.forEach(d => { const k = d.discipline||'Other'; discCount[k]=(discCount[k]||0)+1; });
+
+  // 4. By Project
+  const projCount = {};
+  docs.forEach(d => { if (d.projectId) projCount[d.projectId]=(projCount[d.projectId]||0)+1; });
+
+  // 5. Approval breakdown
+  const approvedCount  = docs.filter(d => latestRev[d.id]?.status === 'approved' || latestRev[d.id]?.status === 'final_approved' || latestRev[d.id]?.finalApproved).length;
+  const notApprCount   = docs.filter(d => latestRev[d.id]?.status === 'new_revision_required' || latestRev[d.id]?.approvalStatus === 'not_approved').length;
+  const awaitingCount  = docs.filter(d => latestRev[d.id]?.status === 'awaiting_response').length;
+  const inProgressCount = docs.length - approvedCount - notApprCount - awaitingCount;
+
+  // 6. Overdue docs (latest rev has targetDate in the past and not sent)
+  const todayStr = today();
+  const overdueCount = docs.filter(d => {
+    const r = latestRev[d.id];
+    if (!r) return false;
+    const t = r.targetDate || r.targetSentDate;
+    return t && t < todayStr && !r.actualSentDate && r.status !== 'approved' && r.status !== 'final_approved';
+  }).length;
+
+  // 7. Revisions per month (last 12 months)
+  const monthCount = {};
+  revs.forEach(r => {
+    const d = r.createdAt?.toDate?.();
+    if (!d) return;
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    monthCount[key] = (monthCount[key]||0)+1;
+  });
+  const sortedMonths = Object.keys(monthCount).sort().slice(-12);
+
+  function barChart(entries, colorFn, maxW = 200) {
+    const max = Math.max(1, ...entries.map(e => e[1]));
+    return entries.map(([label, cnt]) => `
+      <div class="bar-row">
+        <span style="min-width:160px;font-size:13px">${esc(label)}</span>
+        <div class="bar-track" style="flex:1;max-width:${maxW}px">
+          <i class="bar-fill" style="width:${Math.round(cnt/max*100)}%;background:${colorFn(label)}"></i>
+        </div>
+        <strong style="min-width:36px;text-align:right">${cnt}</strong>
+      </div>`).join('');
+  }
+
+  const STATUS_COLORS = { concept:'#98a2b3', submitted:'#0ea5e9', awaiting_response:'#f59e0b',
+    response_received:'#6366f1', comments_received:'#8b5cf6', new_revision_required:'#ef4444',
+    approved:'#009E9B', final_approved:'#007B7A' };
+  const DISC_COLORS2 = { ELT:'#009E9B', INS:'#007B7A', MEC:'#005f5e', PRC:'#3a8a3e',
+    PMG:'#00b4b0', QAC:'#6bd6d3', CIV:'#1a8c8a', STR:'#0d6e6c', ARC:'#4db8b5', HSE:'#2ca9a7', Other:'#98a2b3' };
+
+  render(pageShell('analytics', `
+    <div class="page-header">
+      <div><h1>Analytics</h1><p>Document & revision statistics — ${esc(todayStr)}</p></div>
+    </div>
+
+    <div class="kpi-grid" style="margin-bottom:24px">
+      <div class="kpi info"><span>Total Documents</span><strong>${docs.length}</strong><small>excluding archived</small></div>
+      <div class="kpi success"><span>Approved</span><strong>${approvedCount}</strong><small>approved or final approved</small></div>
+      <div class="kpi danger"><span>Not Approved</span><strong>${notApprCount}</strong><small>needs revision</small></div>
+      <div class="kpi warning"><span>Awaiting Response</span><strong>${awaitingCount}</strong><small>sent to client</small></div>
+      <div class="kpi danger"><span>Overdue</span><strong>${overdueCount}</strong><small>past target, not sent</small></div>
+      <div class="kpi"><span>Total Revisions</span><strong>${revs.length}</strong><small>all time</small></div>
+      <div class="kpi"><span>Active Projects</span><strong>${projects.filter(p=>p.active).length}</strong><small>active</small></div>
+      <div class="kpi"><span>In Progress</span><strong>${inProgressCount}</strong><small>concept / submitted</small></div>
+    </div>
+
+    <div class="dashboard-grid">
+      <div class="panel">
+        <div class="panel-heading"><h2>By Revision Status (latest rev)</h2></div>
+        <div class="bar-list">
+          ${barChart(REV_STATUSES.map(s => [REV_STATUS_LABELS[s], statusCount[s]||0]), l => STATUS_COLORS[REV_STATUSES.find(s=>REV_STATUS_LABELS[s]===l)] || '#98a2b3')}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-heading"><h2>By Discipline</h2></div>
+        <div class="bar-list">
+          ${barChart(Object.entries(discCount).sort((a,b)=>b[1]-a[1]), l => DISC_COLORS2[l]||'#94a3b8')}
+        </div>
+      </div>
+    </div>
+
+    <div class="dashboard-grid" style="margin-top:20px">
+      <div class="panel">
+        <div class="panel-heading"><h2>By Document Type</h2></div>
+        <div class="bar-list">
+          ${barChart(Object.entries(typeCount), l => l==='Internal'?'#009E9B':l==='External'?'#007B7A':'#98a2b3')}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-heading"><h2>By Project (doc count)</h2></div>
+        <div class="bar-list">
+          ${barChart(
+            Object.entries(projCount).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([pid,cnt])=>[(pmap[pid]?.projectNumber||pid)+' '+esc(pmap[pid]?.name||''), cnt]),
+            () => '#009E9B'
+          )}
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-heading"><h2>Revisions Created per Month (last 12 months)</h2></div>
+      <div class="bar-list">
+        ${barChart(sortedMonths.map(m=>[m, monthCount[m]||0]), ()=>'#009E9B', 400)}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-heading">
+        <h2>Approval Summary</h2>
+        <a href="#/export" style="font-size:13px">Export data →</a>
+      </div>
+      <div class="bar-list">
+        ${barChart([
+          ['Approved / Final Approved', approvedCount],
+          ['Awaiting Response', awaitingCount],
+          ['Not Approved / Needs Revision', notApprCount],
+          ['Overdue', overdueCount],
+          ['In Progress / Concept', inProgressCount],
+        ], l => l.startsWith('Approved')?'#009E9B':l.startsWith('Awaiting')?'#f59e0b':l.startsWith('Not')?'#ef4444':l.startsWith('Over')?'#dc2626':'#98a2b3', 400)}
+      </div>
+    </div>
+  `));
+}
+
+// ══════════════════════════════════════════════════════
 //  25.  MAIN ROUTER
 // ══════════════════════════════════════════════════════
 
@@ -2466,6 +2949,7 @@ async function handleRoute() {
       case 'admin-import':     await renderAdminImport();                            break;
       case 'admin-roles':      await renderAdminRoles();                             break;
       case 'export':           await renderExport();                                 break;
+      case 'analytics':        await renderAnalytics();                              break;
       case 'audit':            await renderAudit();                                  break;
       default:
         render(pageShell('dashboard', `<div class="empty-state"><div class="empty-icon">🔍</div><h3>Page not found</h3><a class="btn btn-secondary" href="#/">Go Home</a></div>`));
