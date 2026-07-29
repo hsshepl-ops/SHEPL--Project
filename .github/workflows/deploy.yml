@@ -22,5 +22,5 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
-      - name: Deploy to Firebase
-        run: firebase deploy --project dci-document-control
+      - name: Deploy hosting only
+        run: firebase deploy --only hosting --project dci-document-control
