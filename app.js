@@ -7,12 +7,12 @@
 //  1.  FIREBASE CONFIG  ← PASTE YOUR OWN VALUES HERE
 // ══════════════════════════════════════════════════════
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCnUghRn1eHMGFViaMbtKjTnGr2A_vbmPM",
-  authDomain: "dci-document-control.firebaseapp.com",
-  projectId: "dci-document-control",
-  storageBucket: "dci-document-control.firebasestorage.app",
+  apiKey:            "AIzaSyCnUghRn1eHMGFViaMbtKjTnGr2A_vbmPM",
+  authDomain:        "dci-document-control.firebaseapp.com",
+  projectId:         "dci-document-control",
+  storageBucket:     "dci-document-control.firebasestorage.app",
   messagingSenderId: "934020909406",
-  appId: "1:934020909406:web:bf80144cb9a5300b9ca7cf"
+  appId:             "1:934020909406:web:bf80144cb9a5300b9ca7cf"
 };
 
 // ══════════════════════════════════════════════════════
@@ -1408,22 +1408,32 @@ async function saveUser(e, userId) {
       toast('User updated.','success');
       nav('/admin/users');
     } else {
-      // Create Auth account + profile
-      // NOTE: createUserWithEmailAndPassword signs IN the new user, which we don't want.
-      // We sign the admin back in after creation.
-      const adminEmail = S.user.email;
-      const adminCred = await firebase.auth().currentUser.getIdToken();
-      const cred = await auth.createUserWithEmailAndPassword(email, pass);
-      const newUid = cred.user.uid;
-      await cred.user.updateProfile({ displayName: name });
+      // Create Auth account via REST API — does NOT sign out the current admin
+      const apiKey = firebase.app().options.apiKey;
+      const resp = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password: pass, returnSecureToken: true })
+        }
+      );
+      const data = await resp.json();
+      if (data.error) {
+        const msg = data.error.message || 'Unknown error';
+        if (msg.includes('EMAIL_EXISTS')) throw { code: 'auth/email-already-in-use' };
+        throw new Error(msg);
+      }
+      const newUid = data.localId;
+      // Write Firestore profile
       await db.collection('users').doc(newUid).set({
         displayName: name, email, role, isActive: true,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: S.user?.uid || ''
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        createdBy: S.user?.uid || ''
       });
       invalidateCache();
-      // Sign admin back in — they will be temporarily signed out and back in
-      toast('User created! Please sign in again if prompted.','success');
-      await writeAudit('create','user',newUid,name,{role,email});
+      await writeAudit('create', 'user', newUid, name, { role, email });
+      toast('User created successfully! They can now sign in.', 'success');
       nav('/admin/users');
     }
   } catch (ex) {
