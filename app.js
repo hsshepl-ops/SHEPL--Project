@@ -15,6 +15,8 @@ const FIREBASE_CONFIG = {
   appId:             "1:934020909406:web:bf80144cb9a5300b9ca7cf"
 };
 
+
+const SHEPL_LOGO = "data:image/gif;base64,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";
 // ══════════════════════════════════════════════════════
 //  2.  CONSTANTS
 // ══════════════════════════════════════════════════════
@@ -225,6 +227,7 @@ const ROUTES = [
   { re: /^\/admin\/users\/new$/,                     page: 'user-new',            admin: true },
   { re: /^\/admin\/users\/([^/]+)\/edit$/,           page: 'user-edit',           admin: true, p: ['userId'] },
   { re: /^\/admin\/users$/,                          page: 'admin-users',         admin: true },
+  { re: /^\/admin\/roles$/,                          page: 'admin-roles',         admin: true },
   { re: /^\/admin\/transfer$/,                       page: 'admin-transfer',      admin: true },
   { re: /^\/admin\/import$/,                         page: 'admin-import',        admin: true },
   { re: /^\/export$/,                                page: 'export' },
@@ -271,8 +274,7 @@ function topBar(activePage) {
   return `
   <header class="topbar">
     <a class="brand" href="#/">
-      <span class="brand-mark">DC</span>
-      <span class="brand-text"><strong>Document Control</strong><small>Schedule &amp; Revision Monitor</small></span>
+      <div class="brand-mark"><img src="${SHEPL_LOGO}" alt="SH Engitech"></div>
     </a>
     <nav class="topnav">
       ${navLink('/','Dashboard','dashboard')}
@@ -282,6 +284,7 @@ function topBar(activePage) {
       ${isA ? `<span class="admin-sep"></span>` : ''}
       ${isA ? navLink('/admin/import','Import','admin-import') : ''}
       ${isA ? navLink('/admin/users','Users','admin-users') : ''}
+      ${isA ? navLink('/admin/roles','Role Permissions','admin-roles') : ''}
       ${isA ? navLink('/admin/transfer','Ownership','admin-transfer') : ''}
       ${isA ? navLink('/audit','Audit Log','audit') : ''}
     </nav>
@@ -360,8 +363,8 @@ function renderLogin() {
   render(`
   <div class="auth-shell">
     <div class="auth-card">
-      <div class="auth-logo">DC</div>
-      <h1>Document Control</h1>
+      <div class="auth-logo"><img src="${SHEPL_LOGO}" alt="SH Engitech" style="max-width:200px;height:auto"></div>
+      <h1>DCI — Document Control</h1>
       <p class="subtitle">Sign in to your workspace</p>
       <div class="auth-error" id="auth-err"></div>
       <form id="login-form" onsubmit="doLogin(event)">
@@ -2145,6 +2148,202 @@ async function renderAudit() {
 }
 
 // ══════════════════════════════════════════════════════
+//  24b.  PAGE: ROLE PERMISSIONS
+// ══════════════════════════════════════════════════════
+
+const ROLE_PAGES = [
+  { key: 'dashboard',       label: 'Dashboard' },
+  { key: 'projects',        label: 'Projects' },
+  { key: 'documents',       label: 'Documents' },
+  { key: 'export',          label: 'Export to Excel' },
+  { key: 'admin-import',    label: 'Import from Excel' },
+  { key: 'admin-transfer',  label: 'Ownership Transfer' },
+  { key: 'audit',           label: 'Audit Log' },
+];
+
+const ROLE_COLUMNS = [
+  { key: 'documentNumber',        label: 'Document Number' },
+  { key: 'title',                 label: 'Title' },
+  { key: 'project',               label: 'Project' },
+  { key: 'discipline',            label: 'Discipline' },
+  { key: 'documentCode',          label: 'Document Code' },
+  { key: 'issuePurpose',          label: 'Issue Purpose' },
+  { key: 'internalExternal',      label: 'Int / Ext' },
+  { key: 'responsibleName',       label: 'Owner Name' },
+  { key: 'state',                 label: 'State' },
+  { key: 'revision',              label: 'Revision #' },
+  { key: 'startDate',             label: 'Start Date' },
+  { key: 'targetSentDate',        label: 'Target Sent Date' },
+  { key: 'actualSentDate',        label: 'Actual Sent Date' },
+  { key: 'receivedDate',          label: 'Received Date' },
+  { key: 'clientResponseDueDate', label: 'Client Response Due' },
+  { key: 'finalApproved',         label: 'Final Approved' },
+  { key: 'remarks',               label: 'Remarks' },
+];
+
+// Roles that can be configured (admin always has full access)
+const CONFIGURABLE_ROLES = ['management','project_manager','document_controller','engineer','viewer'];
+
+// Default permissions — all pages/columns ON for all roles
+function defaultRolePermissions() {
+  const perms = {};
+  for (const role of CONFIGURABLE_ROLES) {
+    perms[role] = { pages: {}, columns: {} };
+    for (const p of ROLE_PAGES)    perms[role].pages[p.key]   = true;
+    for (const c of ROLE_COLUMNS)  perms[role].columns[c.key] = true;
+  }
+  return perms;
+}
+
+async function renderAdminRoles() {
+  // Load saved permissions (or use defaults)
+  let perms = defaultRolePermissions();
+  try {
+    const snap = await db.collection('settings').doc('rolePermissions').get();
+    if (snap.exists) {
+      const saved = snap.data();
+      // Merge saved into defaults so new pages/columns get added automatically
+      for (const role of CONFIGURABLE_ROLES) {
+        if (saved[role]) {
+          perms[role].pages   = Object.assign(perms[role].pages,   saved[role].pages   || {});
+          perms[role].columns = Object.assign(perms[role].columns, saved[role].columns || {});
+        }
+      }
+    }
+  } catch (ex) { /* no doc yet, use defaults */ }
+
+  // Build the permissions matrix table
+  function toggleCells(role, section) {
+    const keys = section === 'pages' ? ROLE_PAGES : ROLE_COLUMNS;
+    return keys.map(item => {
+      const checked = perms[role][section][item.key] !== false ? 'checked' : '';
+      return `<td class="perm-cell">
+        <label class="toggle-wrap">
+          <input type="checkbox" class="perm-cb"
+            data-role="${esc(role)}" data-section="${section}" data-key="${esc(item.key)}"
+            ${checked}>
+          <span class="toggle-slider"></span>
+        </label>
+      </td>`;
+    }).join('');
+  }
+
+  function roleBlock(role) {
+    return `
+      <div class="perm-role-block" id="block-${role}">
+        <div class="perm-role-header">
+          <span class="role-badge role-${role}">${esc(ROLE_LABELS[role])}</span>
+          <div class="perm-role-actions">
+            <button class="btn btn-xs btn-secondary" onclick="rolePermSelectAll('${role}','pages',true)">All Pages</button>
+            <button class="btn btn-xs btn-secondary" onclick="rolePermSelectAll('${role}','pages',false)">No Pages</button>
+            <button class="btn btn-xs btn-secondary" onclick="rolePermSelectAll('${role}','columns',true)">All Cols</button>
+            <button class="btn btn-xs btn-secondary" onclick="rolePermSelectAll('${role}','columns',false)">No Cols</button>
+          </div>
+        </div>
+
+        <div class="perm-section-label">Pages (navigation access)</div>
+        <div class="table-wrap">
+          <table class="perm-table">
+            <thead><tr>${ROLE_PAGES.map(p=>`<th>${esc(p.label)}</th>`).join('')}</tr></thead>
+            <tbody><tr>${toggleCells(role,'pages')}</tr></tbody>
+          </table>
+        </div>
+
+        <div class="perm-section-label" style="margin-top:16px">Document Columns (visibility in Documents list)</div>
+        <div class="table-wrap">
+          <table class="perm-table">
+            <thead><tr>${ROLE_COLUMNS.map(c=>`<th>${esc(c.label)}</th>`).join('')}</tr></thead>
+            <tbody><tr>${toggleCells(role,'columns')}</tr></tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  const blocks = CONFIGURABLE_ROLES.map(roleBlock).join('');
+
+  render(pageShell('admin-roles', `
+    <div class="page-header">
+      <div>
+        <h1>Role Permissions</h1>
+        <p>Control which pages and document columns each role can access. Admin always has full access.</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" id="save-perms-btn" onclick="saveRolePermissions()">💾 Save Permissions</button>
+      </div>
+    </div>
+
+    <div class="alert alert-info" style="margin-bottom:20px">
+      ℹ️ <strong>Admin</strong> and <strong>Management (Director)</strong> always have full access and cannot be restricted here.
+      Configure access for the remaining roles below.
+    </div>
+
+    <div id="role-perms-form">
+      ${blocks}
+    </div>
+    <div class="form-actions" style="margin-top:24px">
+      <button class="btn btn-primary" onclick="saveRolePermissions()">💾 Save Permissions</button>
+      <span class="form-error" id="perms-err"></span>
+      <span class="form-success" id="perms-ok" style="color:var(--green);font-weight:600"></span>
+    </div>
+  `));
+
+  // Wire up checkboxes to update in-memory perms on change
+  document.querySelectorAll('.perm-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const { role, section, key } = cb.dataset;
+      if (!perms[role]) perms[role] = { pages: {}, columns: {} };
+      perms[role][section][key] = cb.checked;
+    });
+  });
+}
+
+window.rolePermSelectAll = function(role, section, value) {
+  const keys = section === 'pages' ? ROLE_PAGES : ROLE_COLUMNS;
+  keys.forEach(item => {
+    const cb = document.querySelector(`.perm-cb[data-role="${role}"][data-section="${section}"][data-key="${item.key}"]`);
+    if (cb) { cb.checked = value; cb.dispatchEvent(new Event('change')); }
+  });
+};
+
+window.saveRolePermissions = async function() {
+  const btn = document.getElementById('save-perms-btn');
+  const err = document.getElementById('perms-err');
+  const ok  = document.getElementById('perms-ok');
+  if (err) err.textContent = '';
+  if (ok)  ok.textContent  = '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  // Collect current state from checkboxes
+  const perms = {};
+  for (const role of CONFIGURABLE_ROLES) {
+    perms[role] = { pages: {}, columns: {} };
+    for (const p of ROLE_PAGES) {
+      const cb = document.querySelector(`.perm-cb[data-role="${role}"][data-section="pages"][data-key="${p.key}"]`);
+      perms[role].pages[p.key] = cb ? cb.checked : true;
+    }
+    for (const c of ROLE_COLUMNS) {
+      const cb = document.querySelector(`.perm-cb[data-role="${role}"][data-section="columns"][data-key="${c.key}"]`);
+      perms[role].columns[c.key] = cb ? cb.checked : true;
+    }
+  }
+
+  try {
+    await db.collection('settings').doc('rolePermissions').set({
+      ...perms,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: S.user.uid
+    });
+    await writeAudit('update','settings','rolePermissions','Role permissions updated');
+    toast('Role permissions saved successfully.', 'success');
+    if (ok)  ok.textContent  = '✓ Saved!';
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save Permissions'; }
+  } catch (ex) {
+    if (err) err.textContent = 'Error saving: ' + ex.message;
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save Permissions'; }
+  }
+};
+
+// ══════════════════════════════════════════════════════
 //  25.  MAIN ROUTER
 // ══════════════════════════════════════════════════════
 
@@ -2188,6 +2387,7 @@ async function handleRoute() {
       case 'user-edit':        await renderUserForm(route.params.userId);            break;
       case 'admin-transfer':   await renderAdminTransfer();                          break;
       case 'admin-import':     await renderAdminImport();                            break;
+      case 'admin-roles':      await renderAdminRoles();                             break;
       case 'export':           await renderExport();                                 break;
       case 'audit':            await renderAudit();                                  break;
       default:
