@@ -1350,9 +1350,35 @@ async function renderAdminUsers() {
     <div class="page-header">
       <div><h1>User Management</h1><p id="users-count">Loading…</p></div>
       <div class="header-actions">
+        <button class="btn btn-secondary" onclick="downloadUserTemplate()">⬇ Download Template</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('user-bulk-section').style.display=document.getElementById('user-bulk-section').style.display==='none'?'block':'none'">⬆ Bulk Upload</button>
         <a class="btn btn-primary" href="#/admin/users/new">+ Add User</a>
       </div>
     </div>
+
+    <!-- Bulk Upload Section (hidden by default) -->
+    <div id="user-bulk-section" style="display:none" class="form-card" style="max-width:900px;margin-bottom:20px">
+      <h3 style="margin-bottom:12px">Bulk Upload Users</h3>
+      <div class="alert alert-info" style="margin-bottom:12px">
+        ℹ️ Download the template first, fill in user details, then upload here.
+        Required columns: <strong>Employee ID, Name, Email, Temporary Password, Role</strong>.
+        Optional: Designation, Department, Status (default: active).
+      </div>
+      <label class="upload-zone" for="user-bulk-file" id="user-drop-zone" style="padding:20px;margin-bottom:12px">
+        <div class="upload-icon">👥</div>
+        <p><strong>Click to choose file</strong> or drag and drop here</p>
+        <p>.xlsx or .xls files only</p>
+        <input type="file" id="user-bulk-file" accept=".xlsx,.xls,.csv" onchange="previewUserBulkUpload()">
+      </label>
+      <div id="user-bulk-preview"></div>
+      <div class="form-actions" id="user-bulk-actions" style="display:none">
+        <button type="button" class="btn btn-primary" onclick="doBulkUserUpload()">Upload Users</button>
+        <button type="button" class="btn btn-secondary" onclick="clearUserBulk()">Clear</button>
+        <span class="form-error" id="user-bulk-err"></span>
+      </div>
+      <div id="user-bulk-progress" style="display:none;margin-top:12px"></div>
+    </div>
+
     <div class="panel table-panel">
       <div class="table-wrap">
         <table>
@@ -1386,6 +1412,136 @@ async function renderAdminUsers() {
     const tbody = document.getElementById('users-tbody');
     if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:red;padding:16px">Error loading users: ${esc(err.message)}</td></tr>`;
   });
+}
+
+function downloadUserTemplate() {
+  const headers = ['Employee ID','Name','Email','Temporary Password','Designation','Department','Role','Status'];
+  const sampleRows = [
+    ['EMP001','John Smith','john.smith@shengitech.com','Pass@1234','Senior Engineer','Engineering','engineer','active'],
+    ['EMP002','Jane Doe','jane.doe@shengitech.com','Pass@5678','Project Lead','Project Management','project_manager','active'],
+  ];
+  const notes = [['Roles: admin, management, project_manager, document_controller, engineer, viewer'],
+                 ['Status: active or inactive'],
+                 ['Departments: Engineering, Electrical, Instrumentation, Mechanical, Project Management, Procurement, QA/QC, Civil, Structural, Architecture, HSE, Administration, Finance, IT, Operations']];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows, [], ['--- NOTES ---'], ...notes]);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 4, 22) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'User Template');
+  XLSX.writeFile(wb, 'DCI_User_Upload_Template.xlsx');
+}
+
+let _bulkUserRows = [];
+
+function previewUserBulkUpload() {
+  const file = document.getElementById('user-bulk-file').files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const wb = XLSX.read(ev.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws, { raw: false });
+      // Filter out note rows (no Email column)
+      _bulkUserRows = data.filter(r => r['Email'] && r['Name']);
+      const preview = document.getElementById('user-bulk-preview');
+      if (_bulkUserRows.length === 0) {
+        preview.innerHTML = `<p style="color:red">No valid rows found. Make sure the file has Name and Email columns.</p>`;
+        return;
+      }
+      const heads = ['Employee ID','Name','Email','Designation','Department','Role','Status'];
+      const rows = _bulkUserRows.slice(0,10).map(r =>
+        `<tr>${heads.map(h => `<td>${esc(String(r[h]||''))}</td>`).join('')}</tr>`).join('');
+      preview.innerHTML = `
+        <div class="import-preview" style="margin-bottom:12px">
+          <p><strong>${_bulkUserRows.length}</strong> user${_bulkUserRows.length!==1?'s':''} found · Showing first 10</p>
+          <div class="table-wrap" style="max-height:250px;overflow:auto">
+            <table><thead><tr>${heads.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead>
+            <tbody>${rows}</tbody></table>
+          </div>
+        </div>`;
+      document.getElementById('user-bulk-actions').style.display = 'flex';
+    } catch(ex) {
+      document.getElementById('user-bulk-err').textContent = 'Could not read file: ' + ex.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function clearUserBulk() {
+  _bulkUserRows = [];
+  document.getElementById('user-bulk-preview').innerHTML = '';
+  document.getElementById('user-bulk-actions').style.display = 'none';
+  document.getElementById('user-bulk-file').value = '';
+  document.getElementById('user-bulk-err').textContent = '';
+  document.getElementById('user-bulk-progress').style.display = 'none';
+}
+
+async function doBulkUserUpload() {
+  if (!_bulkUserRows.length) return;
+  const btn = document.querySelector('#user-bulk-actions .btn-primary');
+  const errEl = document.getElementById('user-bulk-err');
+  const progress = document.getElementById('user-bulk-progress');
+  btn.disabled = true; errEl.textContent = ''; progress.style.display = 'block';
+  const apiKey = firebase.app().options.apiKey;
+  let created = 0, skipped = 0, errors = [];
+
+  for (let i = 0; i < _bulkUserRows.length; i++) {
+    const row = _bulkUserRows[i];
+    const name   = (row['Name']||'').trim();
+    const email  = (row['Email']||'').trim().toLowerCase();
+    const pass   = (row['Temporary Password']||'TempPass@123').trim();
+    const empId  = (row['Employee ID']||'').trim();
+    const desig  = (row['Designation']||'').trim();
+    const dept   = (row['Department']||'').trim();
+    const role   = (row['Role']||'engineer').trim().toLowerCase().replace(/ /g,'_');
+    const status = (row['Status']||'active').trim().toLowerCase();
+    const isActive = status !== 'inactive';
+
+    progress.innerHTML = `<p>Processing ${i+1} of ${_bulkUserRows.length}: ${esc(email)}…</p>`;
+
+    if (!email || !name) { errors.push(`Row ${i+2}: missing Name or Email`); skipped++; continue; }
+
+    try {
+      // Check if email already exists in Firestore
+      const existing = await db.collection('users').where('email','==',email).get();
+      if (!existing.empty) { skipped++; errors.push(`${email}: already exists, skipped`); continue; }
+
+      // Create Auth user via REST API (does NOT sign out current user)
+      const resp = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
+        { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ email, password: pass, returnSecureToken: true }) }
+      );
+      const data = await resp.json();
+      if (data.error) {
+        const msg = data.error.message;
+        if (msg === 'EMAIL_EXISTS') { skipped++; errors.push(`${email}: already in Auth, skipped`); continue; }
+        throw new Error(msg);
+      }
+      const uid = data.localId;
+
+      // Write Firestore profile
+      await db.collection('users').doc(uid).set({
+        employeeId: empId, displayName: name, email,
+        role: ROLES.includes(role) ? role : 'engineer',
+        designation: desig, department: dept, isActive,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        createdBy: S.user?.uid || ''
+      });
+      created++;
+    } catch(ex) {
+      errors.push(`${email}: ${ex.message}`);
+    }
+  }
+
+  progress.innerHTML = `
+    <div class="alert ${errors.length && !created ? 'alert-danger' : 'alert-success'}" style="margin-top:8px">
+      ✅ <strong>${created}</strong> user${created!==1?'s':''} created
+      ${skipped ? `, <strong>${skipped}</strong> skipped` : ''}
+      ${errors.length ? `<br><small style="color:#c00">${errors.join('<br>')}</small>` : ''}
+    </div>`;
+  btn.disabled = false;
+  if (created > 0) { _bulkUserRows = []; document.getElementById('user-bulk-actions').style.display = 'none'; }
 }
 
 async function renderUserForm(userId) {
@@ -1658,6 +1814,7 @@ async function renderAdminImport() {
   render(pageShell('admin-import', `
     <div class="page-header">
       <div><h1>Import from Excel</h1><p>Upload an Excel file to import or update documents and revisions.</p></div>
+      <div><button class="btn btn-secondary" onclick="downloadImportTemplate()">⬇ Download Template</button></div>
     </div>
     <div class="form-card" style="max-width:900px">
       <div class="alert alert-info">
@@ -1736,6 +1893,25 @@ function clearImport() {
   document.getElementById('import-preview').innerHTML = '';
   document.getElementById('import-actions').style.display = 'none';
   document.getElementById('imp-file').value = '';
+}
+
+function downloadImportTemplate() {
+  const headers = [
+    'Document Number', 'Title', 'Project Number', 'Discipline', 'Target Sent Date',
+    'Actual Sent Date', 'Received Date', 'Client Response Due Date',
+    'Final Approved', 'Remarks', 'Owner Name'
+  ];
+  const sampleRow = [
+    'ELT-001-001', 'Single Line Diagram', 'PRJ-001', 'ELT', '2024-01-31',
+    '2024-02-05', '2024-02-10', '2024-02-20',
+    'Yes', 'Issued for Review', 'John Smith'
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
+  // Set column widths
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 2, 18) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Import Template');
+  XLSX.writeFile(wb, 'DCI_Import_Template.xlsx');
 }
 
 function normalize(obj, key) {
